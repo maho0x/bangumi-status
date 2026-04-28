@@ -195,6 +195,10 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		if !res.Valid() {
 			continue
 		}
+		// marker missing means the probe's cookie is invalid, not a service fault.
+		if res.Kind == types.KindAuth && res.Err == "marker missing" {
+			continue
+		}
 		kept = append(kept, res)
 	}
 	if err := s.store.Insert(r.Context(), kept); err != nil {

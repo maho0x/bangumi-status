@@ -123,20 +123,23 @@ func (r *Runner) run(ctx context.Context, site string, kind types.Kind) (types.R
 
 	var expectMarker string
 	isAPI := site == "api.bgm.tv"
-	isNext := site == "next.bgm.tv"
 	isNextAPI := site == "next.bgm.tv/p1"
 
 	switch {
+	case isNextAPI && kind == types.KindAuth:
+		httpReq.URL, _ = httpReq.URL.Parse("https://next.bgm.tv/p1/me")
+		httpReq.Host = ""
+		httpReq.Header.Set("Accept", "application/json")
+		if r.cfg.APIToken != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+r.cfg.APIToken)
+		} else if r.cfg.Cookie != "" {
+			httpReq.Header.Set("Cookie", r.cfg.Cookie)
+		}
 	case isNextAPI:
 		u := "https://next.bgm.tv/p1/subjects/1"
 		httpReq.URL, _ = httpReq.URL.Parse(u)
 		httpReq.Host = ""
 		httpReq.Header.Set("Accept", "application/json")
-	case isNext:
-		u := "https://next.bgm.tv/"
-		httpReq.URL, _ = httpReq.URL.Parse(u)
-		httpReq.Host = ""
-		expectMarker = "bangumi"
 	case isAPI && kind == types.KindGuest:
 		// Unauthenticated public endpoint.
 		u := "https://api.bgm.tv/v0/subjects/1"
@@ -199,6 +202,17 @@ func (r *Runner) run(ctx context.Context, site string, kind types.Kind) (types.R
 	}
 
 	switch {
+	case isNextAPI && kind == types.KindAuth:
+		if resp.StatusCode >= 500 {
+			res.Status = types.StatusDown
+		} else if resp.StatusCode == 401 || resp.StatusCode == 403 {
+			res.Status = types.StatusDegraded
+			res.Err = fmt.Sprintf("auth %d", resp.StatusCode)
+		} else if resp.StatusCode >= 400 {
+			res.Status = types.StatusDegraded
+		} else {
+			res.Status = types.StatusOK
+		}
 	case isAPI:
 		if resp.StatusCode >= 500 {
 			res.Status = types.StatusDown
@@ -215,17 +229,6 @@ func (r *Runner) run(ctx context.Context, site string, kind types.Kind) (types.R
 			res.Status = types.StatusDown
 		} else if resp.StatusCode >= 400 {
 			res.Status = types.StatusDegraded
-		} else {
-			res.Status = types.StatusOK
-		}
-	case isNext:
-		if resp.StatusCode >= 500 {
-			res.Status = types.StatusDown
-		} else if resp.StatusCode >= 400 {
-			res.Status = types.StatusDegraded
-		} else if expectMarker != "" && !strings.Contains(strings.ToLower(string(body)), expectMarker) {
-			res.Status = types.StatusDegraded
-			res.Err = "marker missing"
 		} else {
 			res.Status = types.StatusOK
 		}

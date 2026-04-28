@@ -28,8 +28,7 @@ var SiteConfigs = []SiteConfig{
 	{"bgm.tv", []Kind{KindGuest, KindAuth}},
 	{"bangumi.tv", []Kind{KindGuest, KindAuth}},
 	{"chii.in", []Kind{KindGuest, KindAuth}},
-	{"next.bgm.tv", []Kind{KindGuest}},
-	{"next.bgm.tv/p1", []Kind{KindGuest}},
+	{"next.bgm.tv/p1", []Kind{KindGuest, KindAuth}},
 	{"api.bgm.tv", []Kind{KindGuest, KindAuth}},
 }
 
@@ -91,7 +90,10 @@ func AllComponents() []Component {
 
 func LabelFor(site string, kind Kind) string {
 	if site == "next.bgm.tv/p1" {
-		return "next.bgm.tv · API (/p1)"
+		if kind == KindGuest {
+			return "next.bgm.tv · API (/p1)"
+		}
+		return "next.bgm.tv · Authenticated (/p1/me)"
 	}
 	if site == "api.bgm.tv" {
 		if kind == KindGuest {
