@@ -568,7 +568,7 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
 
 .probe-row {
   display: grid;
-  grid-template-columns: minmax(80px, 130px) minmax(0, 160px) 80px 90px;
+  grid-template-columns: minmax(80px, 180px) minmax(0, 1fr) 80px 90px;
   gap: 10px;
   padding: 7px 0;
   font-size: 12.5px;
@@ -582,6 +582,9 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
   font-weight: 500;
   font-family: var(--font-mono);
   font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .probe-row .probe-err {
   font-family: var(--font-mono);
