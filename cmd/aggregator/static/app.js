@@ -149,7 +149,11 @@
     return typeof val === "function" ? val(...args) : (val ?? key);
   };
 
-  const REGION_LABEL = { jp: "Japan", cn: "China", hk: "Hong Kong", us: "US", eu: "EU" };
+  const REGION_LABEL = {
+    jp: "Japan", cn: "China", hk: "Hong Kong", tw: "Taiwan", kr: "Korea",
+    us: "US", ca: "Canada", gb: "UK", de: "Germany", fr: "France",
+    sg: "Singapore", au: "Australia", nl: "Netherlands", ru: "Russia",
+  };
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const ZH_MONTHS = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十", "十一", "十二"];
 
