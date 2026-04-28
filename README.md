@@ -2,7 +2,7 @@
 
 独立的 Bangumi 可用性监控系统，从多个地区的探针节点并发检测 bgm.tv、bangumi.tv、chii.in 及 Bangumi API 的可用状态，聚合结果后展示在状态页面并通过 Telegram 推送告警。
 
-An independent availability monitor for [Bangumi](https://bgm.tv), probing bgm.tv, bangumi.tv, chii.in, next.bgm.tv, and api.bgm.tv from multiple geographic regions.
+An independent availability monitor for [Bangumi](https://bgm.tv), probing bgm.tv, bangumi.tv, chii.in, next.bgm.tv/p1, and api.bgm.tv from multiple geographic regions.
 
 ---
 
@@ -29,7 +29,7 @@ Two binaries sharing the `internal/` packages:
 
 ## 功能 / Features
 
-- 多区域探针，基于 **≥3 探针仲裁**防止单点误报
+- 多区域探针，基于**动态 2/3 多数仲裁**防止单点误报
 - 同时检测 Guest（公开访问）和 Auth（需登录）两种状态
 - 延迟 >5s 标记为 Degraded，无响应标记为 Down
 - 30 天历史正常率图表 + 14 天事件列表
@@ -38,7 +38,7 @@ Two binaries sharing the `internal/` packages:
 - Telegram 机器人告警（连续 2 次异常后触发，含固定状态消息）
 - 在线人数图表（从 bangumi.tv 抓取）
 
-Multi-region probes with **≥3-probe quorum** to eliminate false positives. Detects both Guest and Authenticated access. 30-day uptime history, 14-day incident list, Atom feed, bilingual UI, and Telegram alerts.
+Multi-region probes with a **dynamic 2/3-majority quorum** (ceil(2/3 × active probes), min 2) to eliminate false positives. Detects both Guest and Authenticated access. 30-day uptime history, 14-day incident list, Atom feed, bilingual UI, and Telegram alerts.
 
 ## 快速开始 / Getting Started
 
@@ -86,8 +86,8 @@ INGEST_SECRETS=tok_aaa:alice-;tok_bbb:bob-
 
 ```env
 PROBE_ID=tokyo-1
-PROBE_REGION=jp
-AGGREGATOR_URL=https://your-domain.example/api/ingest
+REGION=jp
+AGG_URL=https://your-domain.example/api/ingest
 INGEST_SECRET=<与聚合器相同 / same as aggregator>
 
 # 检测登录状态需要 / required for Auth checks

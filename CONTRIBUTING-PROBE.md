@@ -122,6 +122,8 @@ sudo \
 - 写凭据到 `/etc/bangumi-status/probe.env`（`chmod 600`）
 - 安装并启动 `bangumi-probe.service`
 
+systemd 服务以 `DynamicUser`（无固定 UID 的临时非特权用户）运行，并启用了完整沙箱：`ProtectSystem=strict`、`PrivateTmp`、`MemoryDenyWriteExecute`、`RestrictAddressFamilies=AF_INET AF_INET6`、`CapabilityBoundingSet=` 等。probe 进程**无法**写入文件系统、访问内核接口或获取任何额外权限。
+
 查看日志：
 
 ```bash
