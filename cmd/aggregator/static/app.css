@@ -450,15 +450,12 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
 .guest-toggle[aria-pressed="true"] .guest-toggle__chevron { transform: rotate(90deg); }
 .guest-toggle[aria-pressed="true"] { color: var(--text); }
 
-/* Guest rows hidden by default; shown when group has .show-guest.
-   Guest rows that aren't OK always stay visible so outages aren't hidden. */
-.group:not(.show-guest) .component[data-kind="guest"][data-status="ok"],
-.group:not(.show-guest) .component[data-kind="guest"][data-status="none"] {
+/* Guest rows hidden when group lacks .show-guest — regardless of status. */
+.group:not(.show-guest) .component[data-kind="guest"] {
   display: none;
 }
 /* When guest row is hidden, auth becomes the visually-first row and needs no top border. */
-.group:not(.show-guest) .component[data-kind="guest"][data-status="ok"] + .component,
-.group:not(.show-guest) .component[data-kind="guest"][data-status="none"] + .component {
+.group:not(.show-guest) .component[data-kind="guest"] + .component {
   border-top: none;
 }
 
