@@ -38,7 +38,7 @@ We welcome third-party probe nodes. Extra geographic vantage points make the quo
 需要 Go 1.21+。在你的服务器或本地交叉编译：
 
 ```bash
-git clone https://github.com/<repo>.git
+git clone https://github.com/maho0x/bangumi-status.git
 cd bangumi-status
 
 # 在目标机器上
@@ -47,7 +47,7 @@ GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o probe ./cmd/probe
 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o probe ./cmd/probe
 ```
 
-只编译 `cmd/probe` 即可，不需要也不应该构建 aggregator。
+只编译 `cmd/probe` 即可，无需构建 aggregator。
 
 ---
 
@@ -67,7 +67,7 @@ GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o probe ./cmd/probe
 
 ### 完全不提供凭据也可以 / Or Skip Auth Entirely
 
-如果你不想交出 cookie，可以省略 `BGM_COOKIE` 和 `BGM_API_TOKEN`。probe 会自动进入 **guest-only 模式**，只检测公开页面的可达性，不参与登录态检测的仲裁。这种节点仍然有价值。
+如果你不想交出 cookie，可以同时省略 `BGM_COOKIE` 和 `BGM_API_TOKEN`（必须**两个都不填**才算 guest-only）。probe 会自动进入 **guest-only 模式**，只检测公开页面的可达性，不参与登录态检测。这种节点对公开页面的多地仲裁仍然有价值。
 
 ---
 
@@ -77,8 +77,8 @@ GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o probe ./cmd/probe
 
 ```bash
 sudo \
-  PROBE_ID=paris-1 \
-  REGION=eu \
+  PROBE_ID=alice-paris-1 \
+  REGION=fr \
   AGG_URL=https://bgm-status.ry.mk/api/ingest \
   INGEST_SECRET=<你拿到的 token> \
   BGM_COOKIE='chii_auth=...; chii_sid=...' \
@@ -86,6 +86,8 @@ sudo \
   PROBE_BIN=./probe \
   bash scripts/setup-probe.sh
 ```
+
+> `PROBE_ID` 必须以分配给你的前缀开头（例如前缀是 `alice-`，那么 `alice-paris-1` / `alice-aws-tokyo` 都可以）。`REGION` 必须是节点**实际所在国家**的 ISO 3166-1 alpha-2 代码（小写两字母），不能填 `eu` `asia` 这类大区。
 
 脚本会：
 - 把 `probe` 安装到 `/opt/bangumi-status/probe`
@@ -115,6 +117,6 @@ sudo systemctl daemon-reload
 
 ## 安全 / Security
 
-- `INGEST_SECRET` 与你的 `PROBE_ID` 绑定，泄露后联系维护者吊销并换发
+- `INGEST_SECRET` 绑定到分配给你的 `PROBE_ID` 前缀，**只能上报前缀下的节点**，无法冒用维护者或其他第三方的节点身份；泄露后联系维护者吊销并换发，不影响他人
 - `BGM_COOKIE` 和 `BGM_API_TOKEN` 仅用于本地 HTTP 请求，**不会**上报给 aggregator——只有探测结果（HTTP 状态码、延迟、错误信息）会被上传
 - 二进制开源，可自行 `go build` 后审计 `internal/check/check.go` 确认行为
