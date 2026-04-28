@@ -384,15 +384,16 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
 .components {
   display: flex;
   flex-direction: column;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
-  overflow: hidden;
+  gap: 10px;
 }
 
-.group { overflow: hidden; border-radius: var(--radius); border: 1px solid var(--border); }
-.group + .group { margin-top: 10px; }
+.group {
+  overflow: hidden;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
 
 .group-hdr {
   display: flex;
@@ -501,8 +502,9 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
 
 .component-right {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
   min-width: 0;
   overflow: hidden;
 }
@@ -513,7 +515,7 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
   gap: 1.5px;
   align-items: stretch;
   height: 20px;
-  width: 100%;
+  flex: 1;
   min-width: 0;
 }
 .strip-cell {
@@ -530,25 +532,21 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
 .strip-cell.cell-down { background: var(--down); }
 .strip-cell.cell-none { background: var(--none-soft); border: 1px solid var(--border); }
 
-.strip-meta {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  font-size: 10.5px;
-  color: var(--text-faint);
-  margin-top: 2px;
-}
-.strip-meta .mid {
+.component-right .mid {
   color: var(--text-dim);
   font-weight: 500;
   font-family: var(--font-mono);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
-.strip-meta .edge { display: none; }
 
 @media (max-width: 720px) {
   .component { grid-template-columns: 1fr; column-gap: 0; row-gap: 8px; padding: 10px 14px; }
+  .component-right { flex-direction: column; align-items: stretch; gap: 4px; }
+  .strip { flex: none; width: 100%; }
+  .component-right .mid { font-size: 10.5px; }
 }
 
 /* Probe detail (expandable) */
@@ -608,21 +606,26 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
 }
 
 .probe-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   background: none;
-  border: none;
+  border: 1px solid var(--border);
   color: var(--text-faint);
-  font-family: var(--font-sans);
+  font-family: var(--font-mono);
   font-size: 11px;
   cursor: pointer;
-  padding: 0;
-  margin: 0;
-  border-radius: 4px;
-  transition: color 0.15s ease;
+  padding: 2px 7px;
+  border-radius: 20px;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
-.probe-toggle:hover { color: var(--text); }
-.component.open .probe-toggle { color: var(--text); }
-.component.open .probe-toggle::before { content: "▾ "; }
-.component:not(.open) .probe-toggle::before { content: "▸ "; }
+.probe-toggle:hover { color: var(--text); border-color: var(--border-strong); background: var(--surface-2); }
+.component.open .probe-toggle { color: var(--text); border-color: var(--border-strong); }
+.probe-toggle__count { font-variant-numeric: tabular-nums; }
+.probe-toggle__chevron::before { content: "▸"; font-size: 9px; }
+.component.open .probe-toggle__chevron::before { content: "▾"; }
 
 /* --- Probes section ------------------------------------------------------- */
 .probes-section { margin-bottom: 48px; }

@@ -643,15 +643,16 @@
     const toggle = el("button", {
       class: "probe-toggle",
       type: "button",
+      "aria-label": "toggle probe detail",
       onclick: () => row.classList.toggle("open"),
-    }, views.length > 0 ? t("probe_count", views.length) : t("no_probe_data"));
-
-    const meta = el("div", { class: "strip-meta" }, [
-      toggle,
-      el("span", { class: "mid" }, fmtUptime(c.uptime) + " " + t("uptime_label")),
+    }, [
+      el("span", { class: "probe-toggle__count" }, String(views.length)),
+      el("span", { class: "probe-toggle__chevron" }),
     ]);
+
     right.appendChild(strip);
-    right.appendChild(meta);
+    right.appendChild(el("span", { class: "mid" }, fmtUptime(c.uptime) + " " + t("uptime_label")));
+    right.appendChild(toggle);
     row.appendChild(right);
 
     const detail = el("div", { class: "probe-detail" });
