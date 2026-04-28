@@ -391,8 +391,8 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
   overflow: hidden;
 }
 
-.group { overflow: hidden; }
-.group + .group { border-top: 1px solid var(--border); }
+.group { overflow: hidden; border-radius: var(--radius); border: 1px solid var(--border); }
+.group + .group { margin-top: 10px; }
 
 .group-hdr {
   display: flex;
