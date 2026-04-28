@@ -345,6 +345,7 @@ INNER JOIN (
   WHERE domain=$1 AND kind=$2 AND ts >= $3
   GROUP BY probe
 ) m ON c.probe = m.probe AND c.ts = m.maxts
+INNER JOIN probes p ON p.name = c.probe
 WHERE c.domain=$4 AND c.kind=$5
 ORDER BY c.region, c.probe`,
 		domain, string(kind), time.Now().Add(-30*time.Minute).Unix(), domain, string(kind))
