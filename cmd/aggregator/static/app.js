@@ -149,6 +149,8 @@
     return typeof val === "function" ? val(...args) : (val ?? key);
   };
 
+  const regionFlag = code => code.toUpperCase().replace(/./g, c => String.fromCodePoint(0x1F1E6 - 65 + c.charCodeAt(0)));
+
   const REGION_LABEL = {
     // East Asia
     jp: "Japan", cn: "China", hk: "Hong Kong", tw: "Taiwan", kr: "Korea", mn: "Mongolia",
@@ -657,7 +659,7 @@
       const listEl = el("div");
       for (const v of views) {
         listEl.appendChild(el("div", { class: "probe-row" }, [
-          el("span", { class: "probe-name" }, v.probe),
+          el("span", { class: "probe-name" }, (v.region ? regionFlag(v.region) + " " : "") + v.probe),
           el("span", { class: "probe-err" }, v.err || (v.http_code ? `HTTP ${v.http_code}` : "—")),
           el("span", { class: "probe-lat" }, v.latency_ms != null ? v.latency_ms + " ms" : "—"),
           el("span", { class: "probe-status" }, [
@@ -766,7 +768,7 @@
       list.appendChild(el("div", { class: "probe-card " + (p.online ? "online" : "offline") }, [
         el("div", {}, [
           el("div", { class: "name" }, p.name),
-          el("div", { class: "region" }, (REGION_LABEL[p.region] || p.region) + " · " + fmtRelative(p.last_seen)),
+          el("div", { class: "region" }, (p.region ? regionFlag(p.region) + " " : "") + (REGION_LABEL[p.region] || p.region) + " · " + fmtRelative(p.last_seen)),
         ]),
         el("span", { class: "pill" }, p.online ? t("probe_pill_online") : t("probe_pill_offline")),
       ]));
