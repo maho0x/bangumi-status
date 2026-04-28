@@ -539,7 +539,8 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  flex-shrink: 0;
+  flex: 0 0 80px;
+  text-align: right;
 }
 
 @media (max-width: 720px) {
