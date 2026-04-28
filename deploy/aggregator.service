@@ -1,0 +1,19 @@
+[Unit]
+Description=Bangumi Status Aggregator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/bangumi-status
+EnvironmentFile=/etc/bangumi-status/aggregator.env
+ExecStart=/opt/bangumi-status/aggregator -addr 172.17.0.1:18361 -db-dsn "postgres://postgres@localhost:5432/bangumi_status?sslmode=disable"
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
