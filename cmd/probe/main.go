@@ -2,6 +2,7 @@ package main
 
 import (
 	"bangumi-status/internal/check"
+	"bangumi-status/internal/region"
 	"bangumi-status/internal/types"
 	"bytes"
 	"context"
@@ -21,7 +22,11 @@ func main() {
 	flag.Parse()
 
 	probeID := mustEnv("PROBE_ID")
-	region := mustEnv("REGION")
+	regionRaw := mustEnv("REGION")
+	regionCode, ok := region.Normalize(regionRaw)
+	if !ok {
+		log.Fatalf("REGION %q is not a valid ISO 3166-1 alpha-2 country code (e.g. jp, cn, us, de, sg)", regionRaw)
+	}
 	aggURL := mustEnv("AGG_URL")
 	secret := mustEnv("INGEST_SECRET")
 
@@ -36,7 +41,11 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	log.Printf("probe %s region=%s interval=%s agg=%s", probeID, region, *interval, aggURL)
+	mode := "auth+guest"
+	if cfg.Cookie == "" && cfg.APIToken == "" {
+		mode = "guest-only (no BGM_COOKIE / BGM_API_TOKEN)"
+	}
+	log.Printf("probe %s region=%s interval=%s agg=%s mode=%s", probeID, regionCode, *interval, aggURL, mode)
 
 	// Run first check immediately, then on ticker.
 	runOnce := func() {
@@ -45,11 +54,11 @@ func main() {
 		outcome := r.RunAll(cctx)
 		for i := range outcome.Results {
 			outcome.Results[i].Probe = probeID
-			outcome.Results[i].Region = region
+			outcome.Results[i].Region = regionCode
 		}
 		if err := send(ctx, aggURL, secret, types.IngestPayload{
 			Probe:       probeID,
-			Region:      region,
+			Region:      regionCode,
 			Results:     outcome.Results,
 			OnlineCount: outcome.OnlineCount,
 			OnlineTS:    outcome.OnlineTS,

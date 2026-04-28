@@ -67,8 +67,20 @@ type Outcome struct {
 }
 
 // RunAll executes every component check concurrently and returns results.
+// Auth-kind checks are skipped entirely when no Bangumi credentials are
+// configured, so a probe with no cookie/token contributes only Guest data.
 func (r *Runner) RunAll(ctx context.Context) Outcome {
-	comps := types.AllComponents()
+	all := types.AllComponents()
+	comps := all
+	if r.cfg.Cookie == "" && r.cfg.APIToken == "" {
+		comps = make([]types.Component, 0, len(all))
+		for _, c := range all {
+			if c.Kind == types.KindAuth {
+				continue
+			}
+			comps = append(comps, c)
+		}
+	}
 	type item struct {
 		res    types.Result
 		online int

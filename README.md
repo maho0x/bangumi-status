@@ -68,6 +68,11 @@ DB_DSN=postgres://user:pass@localhost:5432/bangumi_status?sslmode=disable
 TELEGRAM_BOT_TOKEN=<bot token>
 TELEGRAM_CHAT_ID=<chat id>
 STATUS_PAGE_URL=https://your-domain.example
+
+# 第三方探针 token：每个第三方一个 token，可绑定 1 个或多个 PROBE_ID
+# 格式：token:probeA,probeB;token2:probeC
+# Per-operator tokens for third-party nodes — one token can cover multiple probes
+INGEST_SECRETS=tok_aaa:paris-1,paris-2;tok_bbb:sfo-1
 ```
 
 3. 参考 `deploy/aggregator.service` 配置 systemd 服务
@@ -117,6 +122,14 @@ INGEST_SECRET=... bash deploy/deploy-all.sh
 | `GET` | `/api/health` | Store stats |
 | `GET` | `/api/feed.atom` | Atom feed (last 50 incidents) |
 | `GET` | `/` | SPA frontend |
+
+## 贡献探针节点 / Contributing a Probe Node
+
+欢迎贡献你自己的服务器作为探针节点！详细步骤见 [CONTRIBUTING-PROBE.md](CONTRIBUTING-PROBE.md)。
+
+第三方节点使用各自的 Bangumi 账号凭据和独立的 ingest token，可单独吊销。如不愿意提供凭据，也可以以 guest-only 模式运行（仅检测公开页面）。
+
+Want to contribute a probe node? See [CONTRIBUTING-PROBE.md](CONTRIBUTING-PROBE.md). Third-party nodes use their own Bangumi credentials and a per-probe ingest token, or can run in guest-only mode without any credentials.
 
 ## License
 

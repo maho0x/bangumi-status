@@ -3,6 +3,5 @@ dist/
 info
 .ssh/
 CLAUDE.md
-Wataame_All_SSH_Configs.tar.gz
 *.pem
-aggregator
+/aggregator
