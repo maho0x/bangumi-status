@@ -17,12 +17,19 @@ We welcome third-party probe nodes. Extra geographic vantage points make the quo
 
 ## 1. 联系维护者 / Get Credentials from the Maintainer
 
-通过 issue / 邮件 / Telegram 联系维护者，提供：
-- 你打算使用的 `PROBE_ID`，建议 `<城市>-<序号>` 格式，例如 `paris-1`、`sfo-1`
-- `REGION`，**ISO 3166-1 alpha-2 国家代码**（小写两字母），如 `jp` 日本 / `cn` 中国 / `us` 美国 / `de` 德国 / `fr` 法国 / `sg` 新加坡 / `hk` 香港 / `tw` 台湾 / `kr` 韩国 / `gb` 英国。完整列表见 [ISO 3166-1](https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2)。aggregator 会拒绝非法值
-- 节点位置和大致带宽（用于公开展示）
+通过 issue / 邮件 / Telegram 联系维护者，简单说明：
+- 你的代号或组织名（用于生成 namespace 前缀，例如 `alice` `acme`）
+- 大概打算部署几个节点、地理位置（用于公开展示）
 
-维护者会回复一个分配给你的 `INGEST_SECRET`。**一个 token 可以覆盖你名下的多个节点**——如果你打算同时部署多个 probe，告诉维护者你需要的所有 `PROBE_ID`，它们会被一并 allowlist 到同一个 token 下。token 上报时只能使用 allowlist 内的 `PROBE_ID`，不能冒用别人的节点身份。
+维护者会回复：
+- 一个分配给你的 `INGEST_SECRET`（token）
+- 一个 `PROBE_ID` **前缀**，例如 `alice-`
+
+之后你**自己决定**节点叫什么名字，只需以前缀开头即可：`alice-paris-1`、`alice-aws-tokyo`、`alice-anywhere` 都可以。加新节点不用再联系维护者。
+
+`REGION` 必须是 **ISO 3166-1 alpha-2 国家代码**（小写两字母），如 `jp` 日本 / `cn` 中国 / `us` 美国 / `de` 德国 / `fr` 法国 / `sg` 新加坡 / `hk` 香港 / `tw` 台湾 / `kr` 韩国 / `gb` 英国。完整列表见 [ISO 3166-1](https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2)。aggregator 会拒绝非法值。
+
+> **安全约束**：你的 token 只能上报以分配前缀开头的 `PROBE_ID`，不能冒用维护者或其他第三方的节点身份。
 
 ---
 

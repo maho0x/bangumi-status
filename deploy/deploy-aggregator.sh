@@ -11,6 +11,7 @@ BIN="$ROOT/dist/aggregator-linux-amd64"
 ENV_FILE="$ROOT/dist/aggregator.env"
 {
   echo "INGEST_SECRET=$INGEST_SECRET"
+  [[ -n "${INGEST_SECRETS:-}" ]]     && echo "INGEST_SECRETS=$INGEST_SECRETS"
   [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]] && echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN"
   [[ -n "${TELEGRAM_CHAT_ID:-}" ]]   && echo "TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID"
   [[ -n "${STATUS_PAGE_URL:-}" ]]    && echo "STATUS_PAGE_URL=$STATUS_PAGE_URL"

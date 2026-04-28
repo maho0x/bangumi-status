@@ -36,11 +36,12 @@ type server struct {
 	store *store.Store
 	// secret is the legacy single shared token (admin: accepts any probe-id).
 	secret string
-	// tokenProbes maps a third-party token → set of probe-ids that token is
-	// allowed to upload as. One token can cover multiple nodes from the same
-	// operator.
-	tokenProbes map[string]map[string]struct{}
-	notifier    *notifier.Telegram
+	// tokenPrefixes maps a third-party token → required probe-id prefix.
+	// Anything reported under this token must have a probe-id that
+	// HasPrefix(prefix). The operator can self-pick probe-ids inside their
+	// namespace without contacting the maintainer.
+	tokenPrefixes map[string]string
+	notifier      *notifier.Telegram
 
 	mu       sync.RWMutex
 	cached   *types.Overall
@@ -54,19 +55,15 @@ func main() {
 	flag.Parse()
 
 	secret := os.Getenv("INGEST_SECRET")
-	tokenProbes, err := parseTokenProbes(os.Getenv("INGEST_SECRETS"))
+	tokenPrefixes, err := parseTokenPrefixes(os.Getenv("INGEST_SECRETS"))
 	if err != nil {
 		log.Fatalf("parse INGEST_SECRETS: %v", err)
 	}
-	if secret == "" && len(tokenProbes) == 0 {
+	if secret == "" && len(tokenPrefixes) == 0 {
 		log.Fatal("INGEST_SECRET or INGEST_SECRETS env var is required")
 	}
-	if len(tokenProbes) > 0 {
-		var totalProbes int
-		for _, ps := range tokenProbes {
-			totalProbes += len(ps)
-		}
-		log.Printf("loaded %d third-party token(s) covering %d probe(s)", len(tokenProbes), totalProbes)
+	if len(tokenPrefixes) > 0 {
+		log.Printf("loaded %d third-party token(s) (prefix-namespaced)", len(tokenPrefixes))
 	}
 
 	if *dbDSN == "" {
@@ -93,7 +90,7 @@ func main() {
 		log.Printf("telegram notifications enabled")
 	}
 
-	s := &server{store: st, secret: secret, tokenProbes: tokenProbes, notifier: tg}
+	s := &server{store: st, secret: secret, tokenPrefixes: tokenPrefixes, notifier: tg}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/ingest", s.handleIngest)
@@ -164,25 +161,23 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid region (must be ISO 3166-1 alpha-2 country code)", http.StatusBadRequest)
 		return
 	}
-	// Auth: either the legacy admin token (any probe-id), or a per-probe token
-	// whose binding matches the payload's probe-id (constant-time compare to
-	// avoid timing leaks).
+	// Auth: either the legacy admin token (any probe-id), or a third-party
+	// token whose required prefix matches the payload's probe-id. Constant-
+	// time compare on every token to avoid timing leaks.
 	authorized := false
 	if s.secret != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.secret)) == 1 {
 		authorized = true
 	} else {
-		// Constant-time scan: compare against every third-party token so a
-		// timing side-channel can't leak which token was tried.
-		var matched map[string]struct{}
-		for tok, probes := range s.tokenProbes {
+		matchedPrefix := ""
+		matched := false
+		for tok, prefix := range s.tokenPrefixes {
 			if subtle.ConstantTimeCompare([]byte(token), []byte(tok)) == 1 {
-				matched = probes
+				matchedPrefix = prefix
+				matched = true
 			}
 		}
-		if matched != nil {
-			if _, ok := matched[p.Probe]; ok {
-				authorized = true
-			}
+		if matched && strings.HasPrefix(p.Probe, matchedPrefix) && len(p.Probe) > len(matchedPrefix) {
+			authorized = true
 		}
 	}
 	if !authorized {
@@ -714,18 +709,22 @@ func contentTypeFor(p string) string {
 	return "application/octet-stream"
 }
 
-// parseTokenProbes parses a token allowlist of the form
-//   token1:probeA,probeB;token2:probeC
-// Each token can be used to upload data for any of its listed probe-ids.
-// Semicolons separate operators; commas separate probe-ids within a token.
-// Whitespace around items is trimmed; empty input yields a nil map.
-func parseTokenProbes(raw string) (map[string]map[string]struct{}, error) {
+// parseTokenPrefixes parses a third-party token allowlist of the form
+//   token1:prefix1;token2:prefix2
+// Each token is bound to a required probe-id prefix. The operator can
+// self-pick any probe-id that starts with their prefix. Semicolons separate
+// operators. Empty input yields a nil map.
+//
+// Prefixes must be non-empty and not prefix each other (so one operator
+// can't impersonate another by reporting a probe-id whose prefix matches
+// both). The empty prefix is rejected — that would let a token report any
+// probe-id and impersonate the maintainer.
+func parseTokenPrefixes(raw string) (map[string]string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil, nil
 	}
-	out := map[string]map[string]struct{}{}
-	probeOwner := map[string]string{} // probe-id → first token that claimed it (for dup check)
+	out := map[string]string{}
 	for _, group := range strings.Split(raw, ";") {
 		group = strings.TrimSpace(group)
 		if group == "" {
@@ -733,32 +732,29 @@ func parseTokenProbes(raw string) (map[string]map[string]struct{}, error) {
 		}
 		i := strings.IndexByte(group, ':')
 		if i <= 0 || i == len(group)-1 {
-			return nil, fmt.Errorf("invalid group %q (want token:probeA,probeB)", group)
+			return nil, fmt.Errorf("invalid group %q (want token:prefix)", group)
 		}
 		tok := strings.TrimSpace(group[:i])
-		probesRaw := group[i+1:]
-		if tok == "" {
-			return nil, fmt.Errorf("empty token in group %q", group)
+		prefix := strings.TrimSpace(group[i+1:])
+		if tok == "" || prefix == "" {
+			return nil, fmt.Errorf("empty token or prefix in group %q", group)
 		}
 		if _, dup := out[tok]; dup {
 			return nil, fmt.Errorf("duplicate token entry")
 		}
-		probes := map[string]struct{}{}
-		for _, p := range strings.Split(probesRaw, ",") {
-			p = strings.TrimSpace(p)
-			if p == "" {
+		out[tok] = prefix
+	}
+	// Reject overlapping prefixes (one is a prefix of another) — that would
+	// let one operator's namespace leak into another's.
+	for tokA, prefA := range out {
+		for tokB, prefB := range out {
+			if tokA == tokB {
 				continue
 			}
-			if other, exists := probeOwner[p]; exists && other != tok {
-				return nil, fmt.Errorf("probe-id %q claimed by multiple tokens", p)
+			if strings.HasPrefix(prefB, prefA) {
+				return nil, fmt.Errorf("prefix %q overlaps %q (one operator's namespace contains another)", prefA, prefB)
 			}
-			probeOwner[p] = tok
-			probes[p] = struct{}{}
 		}
-		if len(probes) == 0 {
-			return nil, fmt.Errorf("token %q has no probe-ids", tok)
-		}
-		out[tok] = probes
 	}
 	return out, nil
 }

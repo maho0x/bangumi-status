@@ -69,10 +69,11 @@ TELEGRAM_BOT_TOKEN=<bot token>
 TELEGRAM_CHAT_ID=<chat id>
 STATUS_PAGE_URL=https://your-domain.example
 
-# 第三方探针 token：每个第三方一个 token，可绑定 1 个或多个 PROBE_ID
-# 格式：token:probeA,probeB;token2:probeC
-# Per-operator tokens for third-party nodes — one token can cover multiple probes
-INGEST_SECRETS=tok_aaa:paris-1,paris-2;tok_bbb:sfo-1
+# 第三方探针 token：每个第三方一个 token，绑定一个 PROBE_ID 前缀
+# 格式：token:prefix;token2:prefix2
+# 第三方上报时 PROBE_ID 必须以分配给他的前缀开头，可在前缀内自由命名
+# Per-operator tokens for third-party nodes — bound to a probe-id prefix
+INGEST_SECRETS=tok_aaa:alice-;tok_bbb:bob-
 ```
 
 3. 参考 `deploy/aggregator.service` 配置 systemd 服务
