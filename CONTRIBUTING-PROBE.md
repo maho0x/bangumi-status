@@ -80,6 +80,25 @@ GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o probe ./cmd/probe
 
 ## 4. 安装 / Install
 
+### 方式一：Docker（推荐）
+
+```bash
+docker run -d \
+  --name bangumi-probe \
+  --restart unless-stopped \
+  -e PROBE_ID=alice-paris-1 \
+  -e REGION=fr \
+  -e AGG_URL=https://bgm-status.ry.mk/api/ingest \
+  -e INGEST_SECRET=<你拿到的 token> \
+  -e BGM_COOKIE='chii_auth=...; chii_sid=...' \
+  -e BGM_API_TOKEN=<你的 API token> \
+  ghcr.io/maho0x/bangumi-status-probe:latest
+```
+
+查看日志：`docker logs -f bangumi-probe`
+
+### 方式二：systemd
+
 把构建好的 `probe` 二进制和仓库里的 `scripts/setup-probe.sh` 一起放到目标服务器，然后以 root 运行：
 
 ```bash
