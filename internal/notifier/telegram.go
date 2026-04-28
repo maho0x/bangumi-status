@@ -23,8 +23,9 @@ type ConfigStore interface {
 }
 
 type outageInfo struct {
-	MessageID int
-	StartedAt time.Time
+	MessageID  int
+	StartedAt  time.Time
+	LastStatus types.Status // tracks the worst status seen during the outage
 }
 
 // Telegram posts transition events and maintains a pinned summary message.
@@ -104,10 +105,13 @@ func (t *Telegram) Process(comps []types.ComponentStatus) {
 			// Only auth kind triggers messages; api/next subdomains are silent.
 			silent := c.Domain == "api.bgm.tv" || c.Domain == "next.bgm.tv"
 			if c.Kind != types.KindGuest && !silent {
+				_, activeOutage := t.outages[key]
 				switch {
-				case current == types.StatusDown:
+				case current != types.StatusOK && !activeOutage:
+					// New outage (Down or Degraded) — open an outage thread.
 					actions = append(actions, action{kind: "outage", comp: c})
-				case current == types.StatusOK && notified == types.StatusDown:
+				case current == types.StatusOK && activeOutage:
+					// Recovery from any non-OK state.
 					info := t.outages[key]
 					delete(t.outages, key)
 					actions = append(actions, action{
@@ -128,14 +132,19 @@ func (t *Telegram) Process(comps []types.ComponentStatus) {
 		key := a.comp.Domain + "|" + string(a.comp.Kind)
 		switch a.kind {
 		case "outage":
-			msg := fmt.Sprintf("Bangumi 可能Boom了，这次炸的是 <b>%s</b>\n#炸了",
-				html.EscapeString(serviceLabel(a.comp.Domain)))
+			label := html.EscapeString(serviceLabel(a.comp.Domain))
+			var msg string
+			if a.comp.Status == types.StatusDown {
+				msg = fmt.Sprintf("Bangumi 可能Boom了，这次炸的是 <b>%s</b>\n#炸了", label)
+			} else {
+				msg = fmt.Sprintf("Bangumi 有点不对劲，<b>%s</b> 响应异常\n#降级", label)
+			}
 			id := t.sendMessage(msg, 0)
 			if id != 0 {
 				t.mu.Lock()
 				t.outages[key] = outageInfo{MessageID: id, StartedAt: time.Now()}
 				t.mu.Unlock()
-				log.Printf("telegram: outage msg sent for %s", key)
+				log.Printf("telegram: outage msg sent for %s (status=%s)", key, a.comp.Status)
 			}
 		case "recovery":
 			dur := fmtDuration(time.Since(a.startedAt))
@@ -277,13 +286,19 @@ func (t *Telegram) sendMessage(text string, replyToID int) int {
 	}
 	defer resp.Body.Close()
 	var body struct {
-		OK     bool `json:"ok"`
-		Result struct {
+		OK          bool   `json:"ok"`
+		ErrorCode   int    `json:"error_code"`
+		Description string `json:"description"`
+		Result      struct {
 			MessageID int `json:"message_id"`
 		} `json:"result"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || !body.OK {
-		log.Printf("telegram send failed")
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		log.Printf("telegram send: decode: %v", err)
+		return 0
+	}
+	if !body.OK {
+		log.Printf("telegram send: %d %s", body.ErrorCode, body.Description)
 		return 0
 	}
 	return body.Result.MessageID
