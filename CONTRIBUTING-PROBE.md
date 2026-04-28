@@ -92,7 +92,7 @@ docker run -d \
   -e AGG_URL=https://bgm-status.ry.mk/api/ingest \
   -e INGEST_SECRET=<你拿到的 token> \
   -e BGM_COOKIE='chii_auth=...; chii_sid=...' \
-  -e BGM_USER_AGENT='你的 USER_AGENT' \
+  -e BGM_USER_AGENT=<你的 USER_AGENT> \
   -e BGM_API_TOKEN=<你的 API token> \
   ghcr.io/maho0x/bangumi-status-probe:latest
 ```
@@ -110,7 +110,7 @@ sudo \
   AGG_URL=https://bgm-status.ry.mk/api/ingest \
   INGEST_SECRET=<你拿到的 token> \
   BGM_COOKIE='chii_auth=...; chii_sid=...' \
-  BGM_USER_AGENT='你的 USER_AGENT' \
+  BGM_USER_AGENT=<你的 USER_AGENT> \
   BGM_API_TOKEN=<你的 API token> \
   bash scripts/setup-probe.sh
 ```
