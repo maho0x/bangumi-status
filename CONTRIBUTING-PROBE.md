@@ -8,7 +8,7 @@ We welcome third-party probe nodes. Extra geographic vantage points make the quo
 
 ## 简要流程 / Overview
 
-1. 联系维护者获得分配的 `PROBE_ID` 和专属 `INGEST_SECRET`（每个节点独立 token，可单独吊销）
+1. 联系维护者获得专属 `INGEST_SECRET`（每个节点独立 token，可单独吊销）
 2. 在你的服务器上构建 probe 二进制
 3. 准备你自己的 Bangumi 凭据（**用你自己的账号**）
 4. 运行 `scripts/setup-probe.sh` 完成安装
