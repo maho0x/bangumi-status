@@ -545,9 +545,9 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
 
 @media (max-width: 720px) {
   .component { grid-template-columns: 1fr; column-gap: 0; row-gap: 8px; padding: 10px 14px; }
-  .component-right { flex-direction: column; align-items: stretch; gap: 4px; }
-  .strip { flex: none; width: 100%; }
-  .component-right .mid { font-size: 10.5px; }
+  .component-right { flex-wrap: wrap; gap: 4px 8px; }
+  .strip { flex: 1 1 100%; }
+  .component-right .mid { flex: 1 0 auto; font-size: 10.5px; text-align: left; }
 }
 
 /* Probe detail (expandable) */
