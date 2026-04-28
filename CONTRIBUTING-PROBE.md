@@ -68,9 +68,9 @@ GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o probe ./cmd/probe
 访问 https://next.bgm.tv/demo/access-token ，登录后创建一个 personal access token，复制它的值。
 
 ### `BGM_COOKIE`
-浏览器登录 https://bangumi.tv （或 bgm.tv / chii.in），打开 DevTools → Application → Cookies，把所有该域下的 cookie 拼成一个 `name1=value1; name2=value2; ...` 字符串。
+浏览器登录 https://bangumi.tv （或 bgm.tv / chii.in），在 DevTools 的 **Network** 面板里点任意一个页面请求，把 **`Cookie:`** 请求头的值**整行完整复制**出来。
 
-最关键的是 `chii_auth` / `chii_sid` 等会话 cookie。或者更简单的办法：在 DevTools 的 Network 面板里随便点一个已登录页面的请求，把 `Cookie:` 请求头整个复制出来。
+> **重要：必须复制全部 cookie，不能只挑 `chii_auth` / `chii_sid`。** bgm.tv 会检查 `_ga` 等统计 cookie 是否存在来判断请求是否来自真实浏览器，缺少这些会导致认证失败（marker missing）。
 
 ### 完全不提供凭据也可以 / Or Skip Auth Entirely
 
