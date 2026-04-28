@@ -150,9 +150,32 @@
   };
 
   const REGION_LABEL = {
-    jp: "Japan", cn: "China", hk: "Hong Kong", tw: "Taiwan", kr: "Korea",
-    us: "US", ca: "Canada", gb: "UK", de: "Germany", fr: "France",
-    sg: "Singapore", au: "Australia", nl: "Netherlands", ru: "Russia",
+    // East Asia
+    jp: "Japan", cn: "China", hk: "Hong Kong", tw: "Taiwan", kr: "Korea", mn: "Mongolia",
+    // Southeast Asia
+    sg: "Singapore", my: "Malaysia", th: "Thailand", vn: "Vietnam", ph: "Philippines", id: "Indonesia",
+    // South Asia
+    in: "India",
+    // Oceania
+    au: "Australia", nz: "New Zealand",
+    // North America
+    us: "US", ca: "Canada", mx: "Mexico",
+    // South America
+    br: "Brazil", ar: "Argentina", cl: "Chile",
+    // Western Europe
+    gb: "UK", de: "Germany", fr: "France", nl: "Netherlands", be: "Belgium",
+    ch: "Switzerland", at: "Austria", it: "Italy", es: "Spain", pt: "Portugal",
+    se: "Sweden", no: "Norway", dk: "Denmark", fi: "Finland", ie: "Ireland",
+    // Central & Eastern Europe
+    pl: "Poland", cz: "Czechia", ro: "Romania", hu: "Hungary", sk: "Slovakia",
+    ua: "Ukraine", bg: "Bulgaria", hr: "Croatia", rs: "Serbia",
+    lt: "Lithuania", lv: "Latvia", ee: "Estonia",
+    // Russia & Central Asia
+    ru: "Russia", kz: "Kazakhstan",
+    // Middle East
+    tr: "Turkey", il: "Israel", ae: "UAE", sa: "Saudi Arabia",
+    // Africa
+    za: "South Africa", eg: "Egypt", ng: "Nigeria",
   };
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const ZH_MONTHS = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十", "十一", "十二"];

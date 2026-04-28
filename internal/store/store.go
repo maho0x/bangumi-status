@@ -12,6 +12,16 @@ import (
 
 var cst = time.FixedZone("CST", 8*60*60)
 
+// quorumFor returns the minimum number of probes that must agree to escalate status.
+// Threshold is ceil(2/3 * n), with a floor of 2.
+func quorumFor(n int) int {
+	q := (n*2 + 2) / 3
+	if q < 2 {
+		return 2
+	}
+	return q
+}
+
 type Store struct {
 	db *sql.DB
 }
@@ -182,7 +192,6 @@ func (s *Store) Probes(ctx context.Context) ([]types.Probe, error) {
 // DaySummary returns a single-day bucket for (domain, kind) over an arbitrary
 // time range. The caller is responsible for aligning start/end to a calendar day.
 func (s *Store) DaySummary(ctx context.Context, domain string, kind types.Kind, start, end time.Time) (types.DayBucket, error) {
-	const quorum = 3
 	var bucket types.DayBucket
 	bucket.Day = start.Format("2006-01-02")
 
@@ -195,21 +204,22 @@ SELECT
 FROM (
   SELECT
     CASE
-      WHEN c.status = 'down' AND m.down_in_min >= $1 THEN 'down'
-      WHEN c.status IN ('down', 'degraded') AND m.bad_in_min >= $2 THEN 'degraded'
+      WHEN c.status = 'down' AND m.down_in_min >= GREATEST(2, CEIL(2.0/3.0 * m.checks_in_min)) THEN 'down'
+      WHEN c.status IN ('down', 'degraded') AND m.bad_in_min >= GREATEST(2, CEIL(2.0/3.0 * m.checks_in_min)) THEN 'degraded'
       ELSE 'ok'
     END AS effective_status
   FROM checks c
   INNER JOIN (
     SELECT ((ts + 28800) / 60) AS minute,
+      COUNT(*) AS checks_in_min,
       SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END) AS down_in_min,
       SUM(CASE WHEN status IN ('down', 'degraded') THEN 1 ELSE 0 END) AS bad_in_min
     FROM checks
-    WHERE domain = $3 AND kind = $4 AND ts >= $5 AND ts < $6
+    WHERE domain = $1 AND kind = $2 AND ts >= $3 AND ts < $4
     GROUP BY ((ts + 28800) / 60)
   ) m ON ((c.ts + 28800) / 60) = m.minute
-  WHERE c.domain = $7 AND c.kind = $8 AND c.ts >= $9 AND c.ts < $10
-) sub`, quorum, quorum, domain, string(kind), start.Unix(), end.Unix(), domain, string(kind), start.Unix(), end.Unix())
+  WHERE c.domain = $5 AND c.kind = $6 AND c.ts >= $7 AND c.ts < $8
+) sub`, domain, string(kind), start.Unix(), end.Unix(), domain, string(kind), start.Unix(), end.Unix())
 
 	var okCount, degradeCount, downCount, total int
 	if err := row.Scan(&okCount, &degradeCount, &downCount, &total); err != nil {
@@ -218,10 +228,11 @@ FROM (
 
 	row2 := s.db.QueryRowContext(ctx, `
 SELECT
-  COALESCE(MAX(sub.down_in_min), 0) AS max_down,
-  COALESCE(MAX(sub.bad_in_min), 0) AS max_bad
+  COALESCE(MAX(CASE WHEN sub.down_in_min >= GREATEST(2, CEIL(2.0/3.0 * sub.checks_in_min)) THEN 1 ELSE 0 END), 0) AS had_down,
+  COALESCE(MAX(CASE WHEN sub.bad_in_min  >= GREATEST(2, CEIL(2.0/3.0 * sub.checks_in_min)) THEN 1 ELSE 0 END), 0) AS had_bad
 FROM (
   SELECT ((ts + 28800) / 60) AS minute,
+    COUNT(*) AS checks_in_min,
     SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END) AS down_in_min,
     SUM(CASE WHEN status IN ('down', 'degraded') THEN 1 ELSE 0 END) AS bad_in_min
   FROM checks
@@ -229,8 +240,8 @@ FROM (
   GROUP BY ((ts + 28800) / 60)
 ) sub`, domain, string(kind), start.Unix(), end.Unix())
 
-	var maxDown, maxBad int
-	if err := row2.Scan(&maxDown, &maxBad); err != nil {
+	var hadDown, hadBad int
+	if err := row2.Scan(&hadDown, &hadBad); err != nil {
 		return bucket, err
 	}
 
@@ -241,9 +252,9 @@ FROM (
 		bucket.Uptime = float64(okCount) / float64(total) * 100
 	}
 	bucket.Status = types.StatusOK
-	if maxDown >= quorum {
+	if hadDown > 0 {
 		bucket.Status = types.StatusDown
-	} else if maxBad >= quorum {
+	} else if hadBad > 0 {
 		bucket.Status = types.StatusDegraded
 	}
 	return bucket, nil
@@ -256,8 +267,7 @@ func (s *Store) DailyBuckets(ctx context.Context, domain string, kind types.Kind
 	start := end.Add(-time.Duration(days) * 24 * time.Hour)
 
 	// Single-pass CTE: aggregate per minute, then roll up per day.
-	// A check minute counts as down/degraded only if ≥3 probes agree (quorum).
-	const quorum = 3
+	// A minute counts as down/degraded only if ≥ceil(2/3 * active_probes) agree.
 	rows, err := s.db.QueryContext(ctx, `
 WITH minute_stats AS (
   SELECT
@@ -272,28 +282,27 @@ WITH minute_stats AS (
 )
 SELECT
   day,
-  SUM(checks_in_min)                                                              AS total,
-  SUM(CASE WHEN down_in_min >= $5 THEN checks_in_min ELSE 0 END)                 AS down_count,
-  SUM(CASE WHEN bad_in_min  >= $6 AND down_in_min < $7 THEN checks_in_min ELSE 0 END) AS degrade_count,
-  MAX(down_in_min)                                                                AS max_down,
-  MAX(bad_in_min)                                                                 AS max_bad
+  SUM(checks_in_min)                                                                                                                              AS total,
+  SUM(CASE WHEN down_in_min >= GREATEST(2, CEIL(2.0/3.0 * checks_in_min)) THEN checks_in_min ELSE 0 END)                                         AS down_count,
+  SUM(CASE WHEN bad_in_min  >= GREATEST(2, CEIL(2.0/3.0 * checks_in_min)) AND down_in_min < GREATEST(2, CEIL(2.0/3.0 * checks_in_min)) THEN checks_in_min ELSE 0 END) AS degrade_count,
+  MAX(CASE WHEN down_in_min >= GREATEST(2, CEIL(2.0/3.0 * checks_in_min)) THEN 1 ELSE 0 END)                                                     AS had_down,
+  MAX(CASE WHEN bad_in_min  >= GREATEST(2, CEIL(2.0/3.0 * checks_in_min)) THEN 1 ELSE 0 END)                                                     AS had_bad
 FROM minute_stats
 GROUP BY day`,
-		domain, string(kind), start.Unix(), end.Unix(),
-		quorum, quorum, quorum)
+		domain, string(kind), start.Unix(), end.Unix())
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
 	type dayData struct {
-		total, down, degrade, maxDown, maxBad int
+		total, down, degrade, hadDown, hadBad int
 	}
 	m := map[int64]dayData{}
 	for rows.Next() {
 		var day int64
 		var d dayData
-		if err := rows.Scan(&day, &d.total, &d.down, &d.degrade, &d.maxDown, &d.maxBad); err != nil {
+		if err := rows.Scan(&day, &d.total, &d.down, &d.degrade, &d.hadDown, &d.hadBad); err != nil {
 			return nil, err
 		}
 		m[day] = d
@@ -315,9 +324,9 @@ GROUP BY day`,
 				bucket.Uptime = float64(d.total-d.down-d.degrade) / float64(d.total) * 100
 			}
 			bucket.Status = types.StatusOK
-			if d.maxDown >= quorum {
+			if d.hadDown > 0 {
 				bucket.Status = types.StatusDown
-			} else if d.maxBad >= quorum {
+			} else if d.hadBad > 0 {
 				bucket.Status = types.StatusDegraded
 			}
 		}
@@ -377,7 +386,7 @@ func RollupStatus(views []types.ProbeView) (types.Status, int64) {
 			down++
 		}
 	}
-	const quorum = 3
+	quorum := quorumFor(ok + deg + down)
 	if down >= quorum {
 		return types.StatusDown, latest
 	}
@@ -408,7 +417,6 @@ ORDER BY ts ASC`, domain, string(kind), since.Unix())
 	probes := map[string]pState{}
 
 	const staleSec = int64(180)
-	const quorum = 3
 
 	statusRank := map[types.Status]int{types.StatusOK: 0, types.StatusDegraded: 1, types.StatusDown: 2}
 
@@ -429,6 +437,7 @@ ORDER BY ts ASC`, domain, string(kind), since.Unix())
 			}
 		}
 		bad = down + deg
+		quorum := quorumFor(active)
 		if down >= quorum {
 			return types.StatusDown, active, bad
 		}
