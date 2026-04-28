@@ -70,7 +70,8 @@ GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o probe ./cmd/probe
 ### `BGM_COOKIE`
 浏览器登录 https://bangumi.tv （或 bgm.tv / chii.in），在 DevTools 的 **Network** 面板里点任意一个页面请求，把 **`Cookie:`** 请求头的值**整行完整复制**出来。
 
-> **重要：必须复制全部 cookie，不能只挑 `chii_auth` / `chii_sid`。** bgm.tv 会检查 `_ga` 等统计 cookie 是否存在来判断请求是否来自真实浏览器，缺少这些会导致认证失败（marker missing）。
+### `BGM_USER_AGENT`
+**一定要和当前登入设备的相同！！！**
 
 ### 完全不提供凭据也可以 / Or Skip Auth Entirely
 
@@ -91,6 +92,7 @@ docker run -d \
   -e AGG_URL=https://bgm-status.ry.mk/api/ingest \
   -e INGEST_SECRET=<你拿到的 token> \
   -e BGM_COOKIE='chii_auth=...; chii_sid=...' \
+  -e BGM_USER_AGENT='你的 USER_AGENT' \
   -e BGM_API_TOKEN=<你的 API token> \
   ghcr.io/maho0x/bangumi-status-probe:latest
 ```
@@ -108,6 +110,7 @@ sudo \
   AGG_URL=https://bgm-status.ry.mk/api/ingest \
   INGEST_SECRET=<你拿到的 token> \
   BGM_COOKIE='chii_auth=...; chii_sid=...' \
+  BGM_USER_AGENT='你的 USER_AGENT' \
   BGM_API_TOKEN=<你的 API token> \
   bash scripts/setup-probe.sh
 ```
