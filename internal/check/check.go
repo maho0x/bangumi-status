@@ -144,9 +144,13 @@ func (r *Runner) run(ctx context.Context, site string, kind types.Kind) (types.R
 		httpReq.Host = ""
 		httpReq.Header.Set("Accept", "application/json")
 	case isAPI && kind == types.KindAuth:
-		// Same public endpoint as guest but with Bearer token — /v0/me was
-		// too volatile (frequent 401s unrelated to actual availability).
-		u := "https://api.bgm.tv/v0/subjects/1"
+		// Real auth-required endpoint: returns 200 + the current user's JSON
+		// when the token is valid, 401 otherwise. This actually validates the
+		// token (the previous /v0/subjects/1 did not — it returned 200 even
+		// with a bad token because the endpoint is public). Single-tick 401s
+		// are absorbed by the 2-observation notifier debounce + ≥3-probe
+		// quorum, so transient blips don't page.
+		u := "https://api.bgm.tv/v0/me"
 		httpReq.URL, _ = httpReq.URL.Parse(u)
 		httpReq.Host = ""
 		httpReq.Header.Set("Accept", "application/json")
