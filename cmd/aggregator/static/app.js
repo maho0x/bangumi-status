@@ -908,6 +908,8 @@
     document.querySelectorAll('.component.open').forEach(el => openComponents.add(el.getAttribute('data-key')));
     const showGuestGroups = new Set();
     document.querySelectorAll('.group.show-guest').forEach(el => showGuestGroups.add(el.getAttribute('data-domain')));
+    const hiddenGuestGroups = new Set();
+    document.querySelectorAll('.group:not(.show-guest)').forEach(el => hiddenGuestGroups.add(el.getAttribute('data-domain')));
     const pastShowGuest = document.getElementById('past-incidents-section')?.classList.contains('show-guest');
     const probesExpanded = document.getElementById('probes-toggle')?.getAttribute('aria-expanded') === 'true';
 
@@ -923,7 +925,15 @@
       if (openComponents.has(el.getAttribute('data-key'))) el.classList.add('open');
     });
     document.querySelectorAll('.group').forEach(el => {
-      if (showGuestGroups.has(el.getAttribute('data-domain'))) {
+      const domain = el.getAttribute('data-domain');
+      if (hiddenGuestGroups.has(domain)) {
+        el.classList.remove('show-guest');
+        const btn = el.querySelector('.guest-toggle');
+        if (btn) {
+          btn.setAttribute('aria-pressed', 'false');
+          btn.querySelector('.guest-toggle__label').textContent = t('guest_show');
+        }
+      } else if (showGuestGroups.has(domain)) {
         el.classList.add('show-guest');
         const btn = el.querySelector('.guest-toggle');
         if (btn) {

@@ -20,12 +20,12 @@ for i in 1 2 3 4 5 6 7 8; do
 done
 
 # probe-id, region, arch per host
-./deploy/deploy-probe.sh Eden        hong-kong-1 hk amd64
-./deploy/deploy-probe.sh Tokyo-1     tokyo-1     jp amd64
-./deploy/deploy-probe.sh Osaka-1     osaka-1     jp amd64
-./deploy/deploy-probe.sh Osaka-2     osaka-2     jp amd64
-./deploy/deploy-probe.sh Osaka-3     osaka-3     jp arm64
-./deploy/deploy-probe.sh Shenzhen-1  shenzhen-1  cn amd64
+./deploy/deploy-probe.sh Eden        wataame-hong-kong-1 hk amd64
+./deploy/deploy-probe.sh Tokyo-1     wataame-tokyo-1     jp amd64
+./deploy/deploy-probe.sh Osaka-1     wataame-osaka-1     jp amd64
+./deploy/deploy-probe.sh Osaka-2     wataame-osaka-2     jp amd64
+./deploy/deploy-probe.sh Osaka-3     wataame-osaka-3     jp arm64
+./deploy/deploy-probe.sh Shenzhen-1  wataame-shenzhen-1  cn amd64
 
 echo ">> all probes deployed"
 echo ">> visit https://bgm-status.ry.mk — first probe data should land within 60s"
