@@ -33,21 +33,28 @@ We welcome third-party probe nodes. Extra geographic vantage points make the quo
 
 ---
 
-## 2. 构建 probe / Build the Probe Binary
+## 2. 获取 probe 二进制 / Get the Probe Binary
 
-需要 Go 1.21+。在你的服务器或本地交叉编译：
+**推荐：直接下载预编译二进制（无需 Go 环境）**
+
+前往 [GitHub Releases](https://github.com/maho0x/bangumi-status/releases/latest) 下载对应架构的文件：
+
+```bash
+# x86_64 (amd64)
+curl -fsSL https://github.com/maho0x/bangumi-status/releases/latest/download/probe-linux-amd64 -o probe
+# 或 ARM64 (如树莓派、Oracle ARM 实例等)
+curl -fsSL https://github.com/maho0x/bangumi-status/releases/latest/download/probe-linux-arm64 -o probe
+
+chmod +x probe
+```
+
+**备选：自行编译（需要 Go 1.21+）**
 
 ```bash
 git clone https://github.com/maho0x/bangumi-status.git
 cd bangumi-status
-
-# 在目标机器上
 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o probe ./cmd/probe
-# 或 arm64
-GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o probe ./cmd/probe
 ```
-
-只编译 `cmd/probe` 即可，无需构建 aggregator。
 
 ---
 
@@ -83,7 +90,6 @@ sudo \
   INGEST_SECRET=<你拿到的 token> \
   BGM_COOKIE='chii_auth=...; chii_sid=...' \
   BGM_API_TOKEN=<你的 API token> \
-  PROBE_BIN=./probe \
   bash scripts/setup-probe.sh
 ```
 

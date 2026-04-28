@@ -6,7 +6,7 @@
 #
 # Required env:
 #   PROBE_ID         e.g. paris-1   (assigned by the maintainer)
-#   REGION           e.g. eu        (free-form; jp / cn / us / eu / ...)
+#   REGION           ISO 3166-1 alpha-2 country code (lowercase), e.g. jp / cn / us / de / fr
 #   AGG_URL          ingest URL, e.g. https://bgm-status.ry.mk/api/ingest
 #   INGEST_SECRET    per-probe token issued by the maintainer
 #
