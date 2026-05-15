@@ -72,7 +72,92 @@ CREATE TABLE IF NOT EXISTS online_counts (
   ts_min BIGINT PRIMARY KEY,
   count  INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS reactions (
+  emoji_id   SMALLINT NOT NULL,
+  user_id    TEXT NOT NULL,
+  ip         TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (emoji_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS reactions_created_at_idx ON reactions (created_at);
 `)
+	return err
+}
+
+// ReactionCount is an aggregated count for one emoji over the active window.
+type ReactionCount struct {
+	EmojiID int  `json:"emoji_id"`
+	Count   int  `json:"count"`
+	Mine    bool `json:"mine"`
+}
+
+// ListReactions returns aggregated counts for all reactions added in the last
+// 24h. If userID is non-empty, Mine is set on rows the user has reacted to.
+func (s *Store) ListReactions(ctx context.Context, userID string) ([]ReactionCount, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT emoji_id, COUNT(*)::int, BOOL_OR(user_id = $1)
+		FROM reactions
+		WHERE created_at > NOW() - INTERVAL '24 hours'
+		GROUP BY emoji_id
+		ORDER BY emoji_id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ReactionCount{}
+	for rows.Next() {
+		var r ReactionCount
+		if err := rows.Scan(&r.EmojiID, &r.Count, &r.Mine); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ToggleReaction adds the (emoji,user) pair if absent (or expired) and removes
+// it otherwise. Returns whether the reaction is now active for the user.
+func (s *Store) ToggleReaction(ctx context.Context, emojiID int, userID, ip string) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS(
+		  SELECT 1 FROM reactions
+		  WHERE emoji_id = $1 AND user_id = $2
+		    AND created_at > NOW() - INTERVAL '24 hours'
+		)`, emojiID, userID).Scan(&exists); err != nil {
+		return false, err
+	}
+	if exists {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM reactions WHERE emoji_id = $1 AND user_id = $2`,
+			emojiID, userID); err != nil {
+			return false, err
+		}
+		return false, tx.Commit()
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO reactions (emoji_id, user_id, ip)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (emoji_id, user_id)
+		DO UPDATE SET created_at = NOW(), ip = EXCLUDED.ip`,
+		emojiID, userID, ip); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
+}
+
+// PurgeExpiredReactions removes rows older than the 24h active window.
+// Reads filter by created_at, so this is purely housekeeping.
+func (s *Store) PurgeExpiredReactions(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM reactions WHERE created_at <= NOW() - INTERVAL '24 hours'`)
 	return err
 }
 
@@ -96,7 +181,9 @@ func (s *Store) OnlineSeries(ctx context.Context, since time.Time) ([]types.Onli
 }
 
 // OnlineSeriesBucketed returns samples since `since` grouped into buckets of
-// `bucketSecs` seconds (0 = raw minute resolution), oldest first.
+// `bucketSecs` seconds (0 = raw minute resolution), oldest first. For bucketed
+// queries the value is the per-bucket MAX (peak), not the average — daily
+// peaks are what users want to see for trend, and averaging smooths them away.
 func (s *Store) OnlineSeriesBucketed(ctx context.Context, since time.Time, bucketSecs int64) ([]types.OnlinePoint, error) {
 	var rows *sql.Rows
 	var err error
@@ -106,7 +193,7 @@ func (s *Store) OnlineSeriesBucketed(ctx context.Context, since time.Time, bucke
 			since.Unix())
 	} else {
 		rows, err = s.db.QueryContext(ctx,
-			`SELECT (ts_min / $2) * $2 AS bucket, ROUND(AVG(count))::int
+			`SELECT (ts_min / $2) * $2 AS bucket, MAX(count)
 			 FROM online_counts WHERE ts_min >= $1
 			 GROUP BY bucket ORDER BY bucket ASC`,
 			since.Unix(), bucketSecs)
@@ -333,6 +420,40 @@ GROUP BY day`,
 		out[i] = bucket
 	}
 	return out, nil
+}
+
+// OverlayIncidentsOnBuckets marks each day touched by an incident with at least
+// the incident's severity. DailyBuckets uses strict per-minute quorum and can
+// miss brief outages whose bad checks straddle a minute boundary (probes are
+// staggered within each minute). Incidents uses a 180s rolling state window
+// and is the authoritative source of "did something bad happen on this day".
+func OverlayIncidentsOnBuckets(buckets []types.DayBucket, incidents []types.Incident) {
+	if len(buckets) == 0 || len(incidents) == 0 {
+		return
+	}
+	rank := map[types.Status]int{
+		types.StatusOK:       0,
+		types.StatusDegraded: 1,
+		types.StatusDown:     2,
+	}
+	idx := make(map[string]int, len(buckets))
+	for i, b := range buckets {
+		idx[b.Day] = i
+	}
+	for _, inc := range incidents {
+		startDay := time.Unix(inc.StartTS, 0).In(cst)
+		endDay := time.Unix(inc.EndTS, 0).In(cst)
+		d := time.Date(startDay.Year(), startDay.Month(), startDay.Day(), 0, 0, 0, 0, cst)
+		stop := time.Date(endDay.Year(), endDay.Month(), endDay.Day(), 0, 0, 0, 0, cst)
+		for !d.After(stop) {
+			if i, ok := idx[d.Format("2006-01-02")]; ok {
+				if rank[inc.Status] > rank[buckets[i].Status] {
+					buckets[i].Status = inc.Status
+				}
+			}
+			d = d.AddDate(0, 0, 1)
+		}
+	}
 }
 
 // LatestPerProbe returns the most recent result per probe for (domain, kind).

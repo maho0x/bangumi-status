@@ -23,6 +23,7 @@
       no_probe_data: "no probe data", no_probe_data_detail: "No recent probe data.",
       guest_show: "Show guest access", guest_hide: "Hide guest access",
       collapsed_guest_hint: (n) => `${n} public endpoint incident${n === 1 ? "" : "s"} hidden`,
+      expanded_guest_hint: (n) => `${n} public endpoint incident${n === 1 ? "" : "s"} shown`,
       affected: (n) => `${n} affected`,
       no_incidents: "No incidents reported.", no_data: "No data yet.",
       failed_count: (n) => `${n} failed`, degraded_count: (n) => `${n} degraded`,
@@ -92,6 +93,7 @@
       no_probe_data: "暂无探针数据", no_probe_data_detail: "暂无近期探针数据。",
       guest_show: "显示公共端点", guest_hide: "隐藏公共端点",
       collapsed_guest_hint: (n) => `${n} 个公共端点事件已折叠`,
+      expanded_guest_hint: (n) => `${n} 个公共端点事件已展开`,
       affected: (n) => `${n} 个受影响`,
       no_incidents: "无故障记录。", no_data: "暂无数据。",
       failed_count: (n) => `${n} 次失败`, degraded_count: (n) => `${n} 次降级`,
@@ -292,19 +294,27 @@
   function renderBanner(overall) {
     const banner = document.getElementById("banner");
     const meta = document.getElementById("banner-meta");
-    const status = overall.status || "ok";
+
+    // Guest/public endpoint failures should not escalate the top banner;
+    // they surface as a small badge on the affected group instead.
+    const rank = { ok: 0, degraded: 1, down: 2 };
+    const nonGuest = overall.components.filter(c => c.kind !== "guest");
+    let status = "ok";
+    for (const c of nonGuest) {
+      if ((rank[c.status] || 0) > (rank[status] || 0)) status = c.status;
+    }
 
     banner.className = "banner banner--" + status;
     banner.querySelector(".banner__icon").innerHTML = ICONS[status] || ICONS.loading;
     banner.querySelector(".banner__title").textContent = t("banner_" + status) || overall.message || "Status";
 
-    const affected = overall.components.filter(c => c.status !== "ok");
-    const total = overall.components.length;
+    const affected = nonGuest.filter(c => c.status !== "ok");
+    const total = nonGuest.length;
     banner.querySelector(".banner__sub").textContent = affected.length === 0
       ? t("banner_sub_all", total)
       : t("banner_sub_affected", affected.length, total);
 
-    const avg = overall.components.reduce((a, c) => a + (c.uptime || 0), 0) / (overall.components.length || 1);
+    const avg = nonGuest.reduce((a, c) => a + (c.uptime || 0), 0) / (nonGuest.length || 1);
     const online = overall.probes.filter(p => p.online).length;
 
     meta.innerHTML = "";
@@ -408,7 +418,7 @@
         else if (inc.kind === "auth") hasAuth = true;
       }
 
-      const dayBlock = el("div", { class: "inc-day" + (hasGuest ? " has-guest" : "") + (hasAuth ? " has-auth" : "") });
+      const dayBlock = el("div", { class: "inc-day" + (hasGuest ? " has-guest" : "") + (hasAuth ? " has-auth" : ""), "data-day": iso });
       const rel = fmtDayRelative(iso);
       dayBlock.appendChild(el("div", { class: "inc-day__date" }, [
         document.createTextNode(fmtDayLabel(iso)),
@@ -444,8 +454,31 @@
           ]));
         }
         dayBlock.appendChild(listEl);
-        if (hasGuest && !hasAuth) {
-          dayBlock.appendChild(el("div", { class: "inc-day__collapsed" }, t("collapsed_guest_hint", entries.length)));
+        if (hasGuest) {
+          const guestCount = entries.filter(e => e.kind === "guest").length;
+          const updateLabel = () => {
+            collapsed.textContent = dayBlock.classList.contains("show-guest")
+              ? t("expanded_guest_hint", guestCount)
+              : t("collapsed_guest_hint", guestCount);
+          };
+          const toggle = () => {
+            dayBlock.classList.toggle("show-guest");
+            updateLabel();
+          };
+          const collapsed = el("div", {
+            class: "inc-day__collapsed",
+            role: "button",
+            tabindex: "0",
+            "data-guest-count": String(guestCount),
+            onclick: toggle,
+            onkeydown: (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                toggle();
+              }
+            },
+          }, t("collapsed_guest_hint", guestCount));
+          dayBlock.appendChild(collapsed);
         }
       }
 
@@ -472,6 +505,7 @@
     const values = pts.map(p => p.count);
     const vMin = Math.min(...values);
     const vMax = Math.max(...values);
+    const peakPt = pts.reduce((a, b) => (b.count >= a.count ? b : a), pts[0]);
     summaryEl.textContent = t("online_current", last.count.toLocaleString()) +
       " · " + t("online_peak", vMax.toLocaleString());
 
@@ -510,6 +544,18 @@
     const xLabelStart = fmtXLabel(t0);
     const xLabelEnd = onlineRange === "24h" ? t("now_label") : fmtXLabel(tN);
 
+    // Peak marker (always visible). Anchor label to opposite side from chart edge.
+    const peakX = xFor(peakPt.ts);
+    const peakY = yFor(peakPt.count);
+    const peakD = new Date(peakPt.ts * 1000);
+    const peakTimeLabel = onlineRange === "24h"
+      ? String(peakD.getHours()).padStart(2, "0") + ":" + String(peakD.getMinutes()).padStart(2, "0")
+      : `${peakD.getMonth() + 1}/${peakD.getDate()}`;
+    const peakLabel = `${t("online_peak", peakPt.count.toLocaleString())} · ${peakTimeLabel}`;
+    const peakLabelAnchor = peakX > padL + iw * 0.6 ? "end" : "start";
+    const peakLabelDx = peakLabelAnchor === "end" ? -8 : 8;
+    const peakLabelY = peakY < padT + 14 ? peakY + 14 : peakY - 6;
+
     chartEl.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="online users over time">
       ${yTicks.map(tk => `<line class="grid" x1="${padL}" y1="${tk.y.toFixed(1)}" x2="${W - padR}" y2="${tk.y.toFixed(1)}"/>`).join("")}
       ${yTicks.map(tk => `<text class="axis" x="${padL - 6}" y="${(tk.y + 3).toFixed(1)}" text-anchor="end">${tk.v.toLocaleString()}</text>`).join("")}
@@ -517,6 +563,8 @@
       <text class="axis" x="${W - padR}" y="${H - 5}" text-anchor="end">${xLabelEnd}</text>
       <path class="area" d="${area}"/>
       <path class="line" d="${line}"/>
+      <circle class="peak-dot" cx="${peakX.toFixed(1)}" cy="${peakY.toFixed(1)}" r="3.5"/>
+      <text class="peak-label" x="${(peakX + peakLabelDx).toFixed(1)}" y="${peakLabelY.toFixed(1)}" text-anchor="${peakLabelAnchor}">${peakLabel}</text>
       <line class="cursor" x1="0" y1="${padT}" x2="0" y2="${padT + ih}"/>
       <circle class="marker" r="3.5" cx="0" cy="0"/>
       <rect class="hit" x="${padL}" y="${padT}" width="${iw}" height="${ih}"/>
@@ -708,6 +756,14 @@
       const group = el("div", { class: "group" + (guestIssue || !hasAuth ? " show-guest" : ""), "data-domain": domain });
 
       const hdrRight = el("div", { class: "group-hdr-right" });
+      const guestBad = comps.filter(c => c.kind === "guest" && c.status && c.status !== "ok");
+      if (guestBad.length > 0) {
+        const worst = guestBad.some(c => c.status === "down") ? "down" : "degraded";
+        hdrRight.appendChild(el("span", {
+          class: "guest-badge guest-badge--" + worst,
+          title: t("collapsed_guest_hint", guestBad.length),
+        }, String(guestBad.length)));
+      }
       if (hasGuest && hasAuth) {
         const btn = el("button", {
           class: "guest-toggle",
@@ -834,13 +890,6 @@
     const copyBtn = document.getElementById("copy-feed");
     if (copyBtn && !copyBtn.classList.contains("copied")) copyBtn.textContent = t("copy");
 
-    // Past incidents guest toggle label
-    const pastGuestLabel = document.querySelector("#past-guest-toggle .guest-toggle__label");
-    if (pastGuestLabel) {
-      const shown = document.getElementById("past-incidents-section")?.classList.contains("show-guest");
-      pastGuestLabel.textContent = shown ? t("guest_hide") : t("guest_show");
-    }
-
     document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
   }
 
@@ -911,10 +960,15 @@
     document.querySelectorAll('.group.show-guest').forEach(el => showGuestGroups.add(el.getAttribute('data-domain')));
     const hiddenGuestGroups = new Set();
     document.querySelectorAll('.group:not(.show-guest)').forEach(el => hiddenGuestGroups.add(el.getAttribute('data-domain')));
-    const pastShowGuest = document.getElementById('past-incidents-section')?.classList.contains('show-guest');
+    const expandedDays = new Set();
+    document.querySelectorAll('.inc-day.show-guest').forEach(el => {
+      const day = el.getAttribute('data-day');
+      if (day) expandedDays.add(day);
+    });
     const probesExpanded = document.getElementById('probes-toggle')?.getAttribute('aria-expanded') === 'true';
 
     renderBanner(data);
+    refreshReactions();
     renderUnresolvedIncidents(data);
     renderComponents(data);
     renderOnlineChart(data);
@@ -943,34 +997,23 @@
         }
       }
     });
-    if (pastShowGuest) {
-      const ps = document.getElementById('past-incidents-section');
-      if (ps) ps.classList.add('show-guest');
-      const pt = document.getElementById('past-guest-toggle');
-      if (pt) {
-        pt.setAttribute('aria-pressed', 'true');
-        const lbl = pt.querySelector('.guest-toggle__label');
-        if (lbl) lbl.textContent = t('guest_hide');
+    document.querySelectorAll('.inc-day').forEach(el => {
+      const day = el.getAttribute('data-day');
+      if (day && expandedDays.has(day)) {
+        el.classList.add('show-guest');
+        const collapsed = el.querySelector('.inc-day__collapsed');
+        if (collapsed && collapsed.dataset.guestCount) {
+          const n = Number(collapsed.dataset.guestCount);
+          collapsed.textContent = t('expanded_guest_hint', n);
+        }
       }
-    }
+    });
     if (probesExpanded) {
       const pt = document.getElementById('probes-toggle');
       const pl = document.getElementById('probe-list');
       if (pt) pt.setAttribute('aria-expanded', 'true');
       if (pl) pl.hidden = false;
     }
-  }
-
-  // Past incidents section toggle (collapsed guest by default)
-  const pastSection = document.getElementById("past-incidents-section");
-  const pastGuestToggle = document.getElementById("past-guest-toggle");
-  if (pastSection && pastGuestToggle) {
-    const toggle = () => {
-      const shown = pastSection.classList.toggle("show-guest");
-      pastGuestToggle.setAttribute("aria-pressed", shown ? "true" : "false");
-      pastGuestToggle.querySelector(".guest-toggle__label").textContent = shown ? t("guest_hide") : t("guest_show");
-    };
-    pastGuestToggle.addEventListener("click", toggle);
   }
 
   // Probes section toggle (collapsed by default)
@@ -985,6 +1028,149 @@
     probesToggle.addEventListener("click", toggle);
     probesToggle.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
   }
+
+  // --- Reactions -----------------------------------------------------------
+  const REACTION_IDS = [44, 40, 15, 23, 83, 65, 41, 102, 49, 46, 51, 101];
+  function getReactionUserID() {
+    let id = localStorage.getItem("rx_uid");
+    if (!id || id.length < 8) {
+      id = (crypto.randomUUID ? crypto.randomUUID() : (Date.now().toString(36) + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2))).replace(/-/g, "");
+      localStorage.setItem("rx_uid", id);
+    }
+    return id;
+  }
+  const reactionUID = getReactionUserID();
+  let reactionState = REACTION_IDS.map(id => ({ emoji_id: id, count: 0, mine: false }));
+  let reactionBusy = new Set();
+
+  function renderReactions() {
+    const actives = document.getElementById("rx-actives");
+    const grid = document.getElementById("rx-grid");
+    if (!actives || !grid) return;
+    const byID = {};
+    for (const r of reactionState) byID[r.emoji_id] = r;
+
+    // Active chips: only count > 0, use bangumi .item markup with bg-image emoji.
+    actives.innerHTML = "";
+    for (const id of REACTION_IDS) {
+      const r = byID[id];
+      if (!r || (r.count || 0) <= 0) continue;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "item" + (r.mine ? " selected" : "") + (reactionBusy.has(id) ? " busy" : "");
+      btn.title = r.mine ? "取消贴贴" : "也贴一个";
+      btn.innerHTML =
+        '<span class="emoji" style="background-image:url(\'https://chii.in/img/smiles/tv/' + id + '.gif\')"></span>' +
+        '<span class="num">' + r.count + '</span>';
+      btn.addEventListener("click", (e) => { e.stopPropagation(); toggleReaction(id); });
+      actives.appendChild(btn);
+    }
+
+    // Picker grid: all 12 emoji.
+    grid.innerHTML = "";
+    for (const id of REACTION_IDS) {
+      const r = byID[id] || { emoji_id: id, count: 0, mine: false };
+      const li = document.createElement("li");
+      const a = document.createElement("a");
+      a.href = "javascript:void(0)";
+      a.className = (r.mine ? "is-mine" : "") + (reactionBusy.has(id) ? " is-busy" : "");
+      a.title = r.mine ? "已贴贴，点击取消" : "贴贴";
+      a.innerHTML = '<img class="emoji" src="https://chii.in/img/smiles/tv/' + id + '.gif" alt="" loading="lazy" decoding="async">';
+      a.addEventListener("click", (e) => { e.stopPropagation(); toggleReaction(id); });
+      li.appendChild(a);
+      grid.appendChild(li);
+    }
+  }
+
+  (function setupReactionDropdown() {
+    const dd = document.getElementById("rx-dd");
+    const trigger = document.getElementById("rx-trigger");
+    if (!dd || !trigger) return;
+    const setOpen = (open) => {
+      dd.classList.toggle("open", open);
+      trigger.setAttribute("aria-expanded", open ? "true" : "false");
+    };
+    trigger.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setOpen(!dd.classList.contains("open"));
+    });
+    document.addEventListener("click", (e) => {
+      if (!dd.classList.contains("open")) return;
+      if (dd.contains(e.target)) return;
+      setOpen(false);
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && dd.classList.contains("open")) setOpen(false);
+    });
+  })();
+
+  async function refreshReactions() {
+    try {
+      const resp = await fetch("/api/reactions", {
+        cache: "no-store",
+        headers: { "X-User-ID": reactionUID },
+      });
+      if (!resp.ok) return;
+      reactionState = await resp.json();
+      renderReactions();
+    } catch (e) { /* network glitch — keep last render */ }
+  }
+
+  async function toggleReaction(id) {
+    if (reactionBusy.has(id)) return;
+    reactionBusy.add(id);
+    // Optimistic update.
+    const cur = reactionState.find(r => r.emoji_id === id) || { emoji_id: id, count: 0, mine: false };
+    cur.mine = !cur.mine;
+    cur.count = Math.max(0, (cur.count || 0) + (cur.mine ? 1 : -1));
+    renderReactions();
+    try {
+      const resp = await fetch("/api/reactions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-User-ID": reactionUID },
+        body: JSON.stringify({ emoji_id: id }),
+      });
+      if (!resp.ok) {
+        // Roll back.
+        cur.mine = !cur.mine;
+        cur.count = Math.max(0, (cur.count || 0) + (cur.mine ? 1 : -1));
+      }
+    } catch (e) {
+      cur.mine = !cur.mine;
+      cur.count = Math.max(0, (cur.count || 0) + (cur.mine ? 1 : -1));
+    } finally {
+      reactionBusy.delete(id);
+      refreshReactions();
+    }
+  }
+
+  // Live updates via SSE. Falls back silently to the 30s polling refresh.
+  let reactionES = null;
+  let reactionESBackoff = 1000;
+  function connectReactionStream() {
+    if (typeof EventSource === "undefined") return;
+    try {
+      const es = new EventSource("/api/reactions/stream?uid=" + encodeURIComponent(reactionUID));
+      reactionES = es;
+      es.onmessage = (ev) => {
+        try {
+          reactionState = JSON.parse(ev.data);
+          renderReactions();
+          reactionESBackoff = 1000;
+        } catch (e) { /* ignore malformed frame */ }
+      };
+      es.onerror = () => {
+        es.close();
+        reactionES = null;
+        // Exponential backoff up to 30s.
+        setTimeout(connectReactionStream, reactionESBackoff);
+        reactionESBackoff = Math.min(reactionESBackoff * 2, 30000);
+      };
+    } catch (e) { /* SSE unavailable — poll only */ }
+  }
+  connectReactionStream();
+
+  renderReactions();
 
   async function refresh() {
     try {

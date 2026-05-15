@@ -22,10 +22,24 @@ type ConfigStore interface {
 	SetConfig(ctx context.Context, key, value string) error
 }
 
-type outageInfo struct {
-	MessageID  int
-	StartedAt  time.Time
-	LastStatus types.Status // tracks the worst status seen during the outage
+// defaultMergeWindow groups outage/recovery notifications that occur within
+// this duration of an existing group into a single edited Telegram message.
+const defaultMergeWindow = 10 * time.Minute
+
+type groupEntry struct {
+	Domain    string
+	Kind      types.Kind
+	Status    types.Status
+	StartedAt time.Time
+	Recovered bool
+	EndedAt   time.Time
+	GroupID   int // message_id of containing outageGroup
+}
+
+type outageGroup struct {
+	MessageID int
+	OpenedAt  time.Time
+	Entries   []*groupEntry
 }
 
 // Telegram posts transition events and maintains a pinned summary message.
@@ -37,10 +51,14 @@ type Telegram struct {
 	db      ConfigStore
 	client  *http.Client
 
+	mergeWindow time.Duration
+
 	mu           sync.Mutex
 	last         map[string]types.Status // last-notified status per component
 	pending      map[string]pendingTxn   // transitions awaiting confirmation
-	outages      map[string]outageInfo   // active outage message IDs & start times
+	outages      map[string]*groupEntry  // active (non-recovered) entries by key
+	groups       map[int]*outageGroup    // known groups by message_id
+	activeGroup  *outageGroup            // most-recent group that may absorb new events
 	pinnedMsgID  int
 	pinnedLoaded bool
 }
@@ -52,14 +70,16 @@ type pendingTxn struct {
 
 func NewTelegram(token, chatID, pageURL string, db ConfigStore) *Telegram {
 	return &Telegram{
-		token:   token,
-		chatID:  chatID,
-		pageURL: pageURL,
-		db:      db,
-		client:  &http.Client{Timeout: 10 * time.Second},
-		last:    map[string]types.Status{},
-		pending: map[string]pendingTxn{},
-		outages: map[string]outageInfo{},
+		token:       token,
+		chatID:      chatID,
+		pageURL:     pageURL,
+		db:          db,
+		client:      &http.Client{Timeout: 10 * time.Second},
+		mergeWindow: defaultMergeWindow,
+		last:        map[string]types.Status{},
+		pending:     map[string]pendingTxn{},
+		outages:     map[string]*groupEntry{},
+		groups:      map[int]*outageGroup{},
 	}
 }
 
@@ -74,10 +94,8 @@ func (t *Telegram) Process(comps []types.ComponentStatus) {
 	}
 
 	type action struct {
-		kind      string // "outage" | "recovery"
-		comp      types.ComponentStatus
-		outageID  int
-		startedAt time.Time
+		kind string // "outage" | "recovery"
+		comp types.ComponentStatus
 	}
 	var actions []action
 
@@ -108,16 +126,9 @@ func (t *Telegram) Process(comps []types.ComponentStatus) {
 				_, activeOutage := t.outages[key]
 				switch {
 				case current != types.StatusOK && !activeOutage:
-					// New outage (Down or Degraded) — open an outage thread.
 					actions = append(actions, action{kind: "outage", comp: c})
 				case current == types.StatusOK && activeOutage:
-					// Recovery from any non-OK state.
-					info := t.outages[key]
-					delete(t.outages, key)
-					actions = append(actions, action{
-						kind: "recovery", comp: c,
-						outageID: info.MessageID, startedAt: info.StartedAt,
-					})
+					actions = append(actions, action{kind: "recovery", comp: c})
 				}
 			}
 			t.last[key] = current
@@ -129,30 +140,187 @@ func (t *Telegram) Process(comps []types.ComponentStatus) {
 	t.mu.Unlock()
 
 	for _, a := range actions {
-		key := a.comp.Domain + "|" + string(a.comp.Kind)
 		switch a.kind {
 		case "outage":
-			label := html.EscapeString(serviceLabel(a.comp.Domain))
-			var msg string
-			if a.comp.Status == types.StatusDown {
-				msg = fmt.Sprintf("Bangumi 可能Boom了，这次炸的是 <b>%s</b>\n#炸了", label)
-			} else {
-				msg = fmt.Sprintf("Bangumi 有点不对劲，<b>%s</b> 响应异常\n#降级", label)
-			}
-			id := t.sendMessage(msg, 0)
-			if id != 0 {
-				t.mu.Lock()
-				t.outages[key] = outageInfo{MessageID: id, StartedAt: time.Now()}
-				t.mu.Unlock()
-				log.Printf("telegram: outage msg sent for %s (status=%s)", key, a.comp.Status)
-			}
+			t.handleOutage(a.comp)
 		case "recovery":
-			dur := fmtDuration(time.Since(a.startedAt))
-			msg := fmt.Sprintf("Bangumi 活了！这次炸了 <b>%s</b>\n#活了", dur)
-			t.sendMessage(msg, a.outageID)
-			log.Printf("telegram: recovery msg sent for %s", key)
+			t.handleRecovery(a.comp)
 		}
 	}
+}
+
+// handleOutage either edits the active group's message (if still within the
+// merge window) or opens a new group with a fresh Telegram message.
+func (t *Telegram) handleOutage(c types.ComponentStatus) {
+	key := c.Domain + "|" + string(c.Kind)
+	now := time.Now()
+
+	t.mu.Lock()
+	entry := &groupEntry{
+		Domain:    c.Domain,
+		Kind:      c.Kind,
+		Status:    c.Status,
+		StartedAt: now,
+	}
+	t.outages[key] = entry
+
+	var (
+		merge bool
+		group *outageGroup
+		msgID int
+	)
+	if t.activeGroup != nil && now.Sub(t.activeGroup.OpenedAt) < t.mergeWindow {
+		merge = true
+		group = t.activeGroup
+		msgID = group.MessageID
+		entry.GroupID = msgID
+		group.Entries = append(group.Entries, entry)
+	} else {
+		group = &outageGroup{OpenedAt: now, Entries: []*groupEntry{entry}}
+	}
+	text := renderGroupText(group)
+	t.mu.Unlock()
+
+	if merge {
+		switch t.editMessage(msgID, text) {
+		case editOK:
+			log.Printf("telegram: outage merged into msg %d (%s)", msgID, key)
+			return
+		case editFailed:
+			// Transient — leave entry attached; a later edit will pick it up.
+			log.Printf("telegram: edit failed for msg %d, leaving entry attached", msgID)
+			return
+		case editGone:
+			// Message vanished — detach and fall through to send a fresh one.
+			log.Printf("telegram: active group msg %d gone, opening new group", msgID)
+			t.mu.Lock()
+			group.Entries = removeEntry(group.Entries, entry)
+			if t.activeGroup == group {
+				t.activeGroup = nil
+			}
+			group = &outageGroup{OpenedAt: now, Entries: []*groupEntry{entry}}
+			entry.GroupID = 0
+			text = renderGroupText(group)
+			t.mu.Unlock()
+		}
+	}
+
+	id := t.sendMessage(text, 0)
+	if id == 0 {
+		return
+	}
+	t.mu.Lock()
+	group.MessageID = id
+	entry.GroupID = id
+	t.groups[id] = group
+	t.activeGroup = group
+	t.mu.Unlock()
+	log.Printf("telegram: outage group %d opened for %s", id, key)
+}
+
+// handleRecovery marks the entry as recovered and re-edits the group's message
+// so the recovery appears alongside the original outage report.
+func (t *Telegram) handleRecovery(c types.ComponentStatus) {
+	key := c.Domain + "|" + string(c.Kind)
+	now := time.Now()
+
+	t.mu.Lock()
+	entry, ok := t.outages[key]
+	if !ok {
+		t.mu.Unlock()
+		return
+	}
+	entry.Recovered = true
+	entry.EndedAt = now
+	delete(t.outages, key)
+
+	group := t.groups[entry.GroupID]
+	if group == nil {
+		t.mu.Unlock()
+		dur := fmtDuration(now.Sub(entry.StartedAt))
+		t.sendMessage(fmt.Sprintf("Bangumi 活了！这次炸了 <b>%s</b>\n#活了", dur), 0)
+		return
+	}
+	text := renderGroupText(group)
+	msgID := group.MessageID
+	t.mu.Unlock()
+
+	if msgID != 0 {
+		switch t.editMessage(msgID, text) {
+		case editOK:
+			log.Printf("telegram: recovery merged into msg %d (%s)", msgID, key)
+			return
+		case editFailed:
+			log.Printf("telegram: edit failed for recovery on msg %d", msgID)
+			return
+		}
+	}
+	// editGone or no msgID — fall back to a standalone reply.
+	dur := fmtDuration(now.Sub(entry.StartedAt))
+	t.sendMessage(fmt.Sprintf("Bangumi 活了！这次炸了 <b>%s</b>\n#活了", dur), msgID)
+}
+
+func removeEntry(s []*groupEntry, target *groupEntry) []*groupEntry {
+	out := s[:0]
+	for _, e := range s {
+		if e != target {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func renderGroupText(g *outageGroup) string {
+	if len(g.Entries) == 1 {
+		e := g.Entries[0]
+		label := html.EscapeString(serviceLabel(e.Domain))
+		switch {
+		case e.Recovered:
+			return fmt.Sprintf("Bangumi 活了！这次炸了 <b>%s</b>\n#活了", fmtDuration(e.EndedAt.Sub(e.StartedAt)))
+		case e.Status == types.StatusDown:
+			return fmt.Sprintf("Bangumi 可能Boom了，这次炸的是 <b>%s</b>\n#炸了", label)
+		default:
+			return fmt.Sprintf("Bangumi 有点不对劲，<b>%s</b> 响应异常\n#降级", label)
+		}
+	}
+
+	allRecovered := true
+	anyDown := false
+	for _, e := range g.Entries {
+		if !e.Recovered {
+			allRecovered = false
+			if e.Status == types.StatusDown {
+				anyDown = true
+			}
+		}
+	}
+
+	var b strings.Builder
+	switch {
+	case allRecovered:
+		b.WriteString("Bangumi 全部恢复\n\n")
+	case anyDown:
+		b.WriteString("Bangumi 可能Boom了\n\n")
+	default:
+		b.WriteString("Bangumi 有点不对劲\n\n")
+	}
+	for _, e := range g.Entries {
+		label := html.EscapeString(serviceLabel(e.Domain))
+		switch {
+		case e.Recovered:
+			fmt.Fprintf(&b, "✅ <b>%s</b> 已恢复（持续 %s）\n", label, fmtDuration(e.EndedAt.Sub(e.StartedAt)))
+		case e.Status == types.StatusDown:
+			fmt.Fprintf(&b, "🔴 <b>%s</b> 中断\n", label)
+		default:
+			fmt.Fprintf(&b, "🟡 <b>%s</b> 响应异常\n", label)
+		}
+	}
+	if allRecovered {
+		b.WriteString("\n#活了")
+	} else {
+		b.WriteString("\n#炸了")
+	}
+	return b.String()
 }
 
 // UpdateSummary edits the pinned channel summary message with the current

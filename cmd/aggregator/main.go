@@ -41,12 +41,54 @@ type server struct {
 	// HasPrefix(prefix). The operator can self-pick probe-ids inside their
 	// namespace without contacting the maintainer.
 	tokenPrefixes map[string]string
-	notifier      *notifier.Telegram
+	// onlineSourceProbe is the canonical probe whose OnlineCount samples are
+	// recorded. Multiple probes scrape bangumi.tv at different offsets and see
+	// slightly different values; trusting one source avoids systematic bias.
+	onlineSourceProbe string
+	notifier          *notifier.Telegram
 
 	mu       sync.RWMutex
 	cached   *types.Overall
 	cachedAt time.Time
 	sfGroup  singleflight.Group
+
+	rxHub *reactionHub
+}
+
+// reactionHub fans out "something changed" pings to active SSE subscribers.
+// Subscribers re-query the DB on their own so each client receives counts
+// already filtered by its own user-id.
+type reactionHub struct {
+	mu   sync.Mutex
+	subs map[chan struct{}]struct{}
+}
+
+func newReactionHub() *reactionHub {
+	return &reactionHub{subs: map[chan struct{}]struct{}{}}
+}
+
+func (h *reactionHub) subscribe() (chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
+	h.mu.Lock()
+	h.subs[ch] = struct{}{}
+	h.mu.Unlock()
+	return ch, func() {
+		h.mu.Lock()
+		delete(h.subs, ch)
+		h.mu.Unlock()
+	}
+}
+
+func (h *reactionHub) notify() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for ch := range h.subs {
+		select {
+		case ch <- struct{}{}:
+		default:
+			// Subscriber already has a pending tick — coalesce.
+		}
+	}
 }
 
 func main() {
@@ -90,7 +132,13 @@ func main() {
 		log.Printf("telegram notifications enabled")
 	}
 
-	s := &server{store: st, secret: secret, tokenPrefixes: tokenPrefixes, notifier: tg}
+	onlineSourceProbe := os.Getenv("ONLINE_SOURCE_PROBE")
+	if onlineSourceProbe == "" {
+		onlineSourceProbe = "wataame-tokyo-1"
+	}
+	log.Printf("online counter source: %s", onlineSourceProbe)
+
+	s := &server{store: st, secret: secret, tokenPrefixes: tokenPrefixes, onlineSourceProbe: onlineSourceProbe, notifier: tg, rxHub: newReactionHub()}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/ingest", s.handleIngest)
@@ -100,6 +148,9 @@ func main() {
 	mux.HandleFunc("GET /api/probes", s.handleProbes)
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /api/feed.atom", s.handleFeed)
+	mux.HandleFunc("GET /api/reactions", s.handleReactionsList)
+	mux.HandleFunc("POST /api/reactions", s.handleReactionsToggle)
+	mux.HandleFunc("GET /api/reactions/stream", s.handleReactionsStream)
 
 	// Serve embedded static site at /.
 	sub, err := fs.Sub(staticFS, "static")
@@ -122,6 +173,7 @@ func main() {
 	go s.retentionLoop(ctx)
 	go s.cacheRefreshLoop(ctx)
 	go s.dailyReportLoop(ctx)
+	go s.reactionPurgeLoop(ctx)
 
 	go func() {
 		log.Printf("listening on %s db=%s", *addr, *dbDSN)
@@ -206,7 +258,7 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.store.UpsertProbe(r.Context(), p.Probe, p.Region, time.Now().Unix())
-	if p.OnlineCount > 0 {
+	if p.OnlineCount > 0 && p.Probe == s.onlineSourceProbe {
 		ts := p.OnlineTS
 		if ts == 0 {
 			ts = time.Now().Unix()
@@ -214,10 +266,10 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		_ = s.store.InsertOnline(r.Context(), ts, p.OnlineCount)
 	}
 
-	// Invalidate cache so the next /api/status call recomputes.
-	s.mu.Lock()
-	s.cached = nil
-	s.mu.Unlock()
+	// Note: we do NOT invalidate the cache here. The 14 probes ingest every
+	// ~4 seconds combined; nil-ing the cache forces the next /api/status
+	// caller to block on a 10+ second recomputation. cacheRefreshLoop refreshes
+	// in the background every 20s, which is fresh enough for a status page.
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "accepted": len(kept)})
@@ -410,6 +462,208 @@ func (s *server) handleFeed(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("\n"))
 }
 
+// allowedReactions is the canonical set of reaction emoji IDs (chii.in TV smiles).
+var allowedReactions = map[int]bool{
+	44: true, 40: true, 15: true, 23: true, 83: true, 65: true,
+	41: true, 102: true, 49: true, 46: true, 51: true, 101: true,
+}
+
+// reactionRate throttles toggle calls per source IP (token bucket: 30/min).
+var reactionRate = newRateLimiter(30, time.Minute)
+
+func (s *server) handleReactionsList(w http.ResponseWriter, r *http.Request) {
+	userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+	if len(userID) > 128 {
+		userID = ""
+	}
+	counts, err := s.store.ListReactions(r.Context(), userID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Ensure every allowed emoji appears even when count is 0.
+	byID := map[int]store.ReactionCount{}
+	for _, c := range counts {
+		byID[c.EmojiID] = c
+	}
+	out := make([]store.ReactionCount, 0, len(allowedReactions))
+	for id := range allowedReactions {
+		if c, ok := byID[id]; ok {
+			out = append(out, c)
+		} else {
+			out = append(out, store.ReactionCount{EmojiID: id})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].EmojiID < out[j].EmojiID })
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+func (s *server) handleReactionsToggle(w http.ResponseWriter, r *http.Request) {
+	userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+	if userID == "" || len(userID) < 8 || len(userID) > 128 {
+		http.Error(w, "missing or invalid X-User-ID", http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		EmojiID int `json:"emoji_id"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if !allowedReactions[body.EmojiID] {
+		http.Error(w, "unknown emoji_id", http.StatusBadRequest)
+		return
+	}
+	ip := clientIP(r)
+	if !reactionRate.allow(ip) {
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
+		return
+	}
+	active, err := s.store.ToggleReaction(r.Context(), body.EmojiID, userID, ip)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.rxHub.notify()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"active": active})
+}
+
+// handleReactionsStream pushes the full reaction count list whenever the
+// global state changes (and as a periodic heartbeat). The user id is taken
+// from the `uid` query param because EventSource cannot set custom headers.
+func (s *server) handleReactionsStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	userID := strings.TrimSpace(r.URL.Query().Get("uid"))
+	if len(userID) > 128 {
+		userID = ""
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // disable proxy buffering (nginx/caddy)
+	flusher.Flush()
+
+	ch, cleanup := s.rxHub.subscribe()
+	defer cleanup()
+
+	send := func() bool {
+		counts, err := s.store.ListReactions(r.Context(), userID)
+		if err != nil {
+			return false
+		}
+		byID := map[int]store.ReactionCount{}
+		for _, c := range counts {
+			byID[c.EmojiID] = c
+		}
+		out := make([]store.ReactionCount, 0, len(allowedReactions))
+		for id := range allowedReactions {
+			if c, ok := byID[id]; ok {
+				out = append(out, c)
+			} else {
+				out = append(out, store.ReactionCount{EmojiID: id})
+			}
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].EmojiID < out[j].EmojiID })
+		buf, err := json.Marshal(out)
+		if err != nil {
+			return false
+		}
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", buf); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+
+	if !send() {
+		return
+	}
+
+	heartbeat := time.NewTicker(25 * time.Second)
+	defer heartbeat.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ch:
+			if !send() {
+				return
+			}
+		case <-heartbeat.C:
+			if _, err := fmt.Fprintf(w, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if i := strings.IndexByte(xff, ','); i > 0 {
+			return strings.TrimSpace(xff[:i])
+		}
+		return strings.TrimSpace(xff)
+	}
+	if xr := r.Header.Get("X-Real-IP"); xr != "" {
+		return strings.TrimSpace(xr)
+	}
+	host := r.RemoteAddr
+	if i := strings.LastIndexByte(host, ':'); i > 0 {
+		host = host[:i]
+	}
+	return host
+}
+
+// rateLimiter is a tiny per-key token bucket. Not designed for high concurrency
+// but adequate for low-rate UI actions like reaction toggles.
+type rateLimiter struct {
+	mu     sync.Mutex
+	hits   map[string][]time.Time
+	limit  int
+	window time.Duration
+}
+
+func newRateLimiter(limit int, window time.Duration) *rateLimiter {
+	return &rateLimiter{hits: map[string][]time.Time{}, limit: limit, window: window}
+}
+
+func (l *rateLimiter) allow(key string) bool {
+	now := time.Now()
+	cutoff := now.Add(-l.window)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	xs := l.hits[key]
+	out := xs[:0]
+	for _, t := range xs {
+		if t.After(cutoff) {
+			out = append(out, t)
+		}
+	}
+	if len(out) >= l.limit {
+		l.hits[key] = out
+		return false
+	}
+	l.hits[key] = append(out, now)
+	// Opportunistic GC: drop empty entries to keep the map bounded.
+	if len(l.hits) > 4096 {
+		for k, v := range l.hits {
+			if len(v) == 0 || v[len(v)-1].Before(cutoff) {
+				delete(l.hits, k)
+			}
+		}
+	}
+	return true
+}
+
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	stats, err := s.store.Stats(r.Context())
 	if err != nil {
@@ -488,6 +742,7 @@ func (s *server) computeOverall(ctx context.Context) (*types.Overall, error) {
 			if err != nil {
 				return err
 			}
+			store.OverlayIncidentsOnBuckets(buckets, incidents)
 			var totalOK, totalAll int
 			for _, b := range buckets {
 				totalAll += b.Total
@@ -582,7 +837,26 @@ func (s *server) retentionLoop(ctx context.Context) {
 	}
 }
 
+func (s *server) reactionPurgeLoop(ctx context.Context) {
+	t := time.NewTicker(1 * time.Hour)
+	defer t.Stop()
+	for {
+		if err := s.store.PurgeExpiredReactions(ctx); err != nil {
+			log.Printf("reactions purge: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
 func (s *server) cacheRefreshLoop(ctx context.Context) {
+	// Warm the cache immediately at startup so the first /api/status request
+	// after boot doesn't block on a cold computation.
+	s.getOverall(ctx) //nolint:errcheck
+
 	t := time.NewTicker(20 * time.Second)
 	defer t.Stop()
 	for {

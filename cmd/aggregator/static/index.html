@@ -52,6 +52,17 @@
       </dl>
     </section>
 
+    <div class="banner-reactions">
+      <div class="likes_grid" id="rx-actives"></div>
+      <div class="action dropdown rx-dd" id="rx-dd">
+        <a href="javascript:void(0)" class="icon like_dropdown" id="rx-trigger" aria-haspopup="true" aria-expanded="false">
+          <span class="ico ico_like" aria-hidden="true"></span>
+          <span class="title">贴贴</span>
+        </a>
+        <ul class="grid rx-grid" id="rx-grid" role="menu"></ul>
+      </div>
+    </div>
+
     <section id="unresolved-section" class="inc-section inc-section--unresolved" aria-label="未解决的事故" hidden>
       <header class="section-head">
         <h2>未解决的事故</h2>
@@ -97,10 +108,6 @@
       <header class="section-head">
         <h2>历史事故</h2>
         <div class="section-head__right">
-          <button class="guest-toggle" type="button" id="past-guest-toggle" aria-pressed="false">
-            <span class="guest-toggle__chevron" aria-hidden="true"></span>
-            <span class="guest-toggle__label">显示公共端点</span>
-          </button>
           <span class="section-head__hint">最近14天</span>
         </div>
       </header>
@@ -131,6 +138,7 @@
   </main>
 
   <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+
 
   <div id="subscribe-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="subscribe-title" hidden>
     <div class="modal__backdrop" data-close></div>
