@@ -631,18 +631,18 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
 }
 .rx-shake { animation: rx-shake 0.3s ease; }
 @keyframes rx-float-up {
-  0%   { opacity: 1; transform: translateY(0) scale(1.1); }
-  60%  { opacity: 0.9; }
-  100% { opacity: 0; transform: translateY(-48px) scale(0.6); }
+  0%   { opacity: 1;   transform: translateY(0)     scale(1.5) rotate(0deg); }
+  30%  { opacity: 1;   transform: translateY(-24px) scale(1.2) rotate(calc(var(--rx-rot, 0deg) * 0.5)); }
+  100% { opacity: 0;   transform: translateY(-72px) scale(0.5) rotate(var(--rx-rot, 0deg)); }
 }
 .rx-float {
   position: fixed;
   pointer-events: none;
   z-index: 9999;
-  width: 24px;
-  height: 24px;
+  width: 30px;
+  height: 30px;
   image-rendering: pixelated;
-  animation: rx-float-up 0.65s cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
+  animation: rx-float-up 0.9s cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
 }
 .rx-grid img.emoji {
   width: 22px;

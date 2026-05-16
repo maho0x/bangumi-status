@@ -1057,6 +1057,7 @@
       if (!r || (r.count || 0) <= 0) continue;
       const btn = document.createElement("button");
       btn.type = "button";
+      btn.dataset.eid = id;
       btn.className = "item" + (r.mine ? " selected" : "");
       btn.title = "再贴一个";
       btn.innerHTML =
@@ -1122,10 +1123,35 @@
     img.src = "https://chii.in/img/smiles/tv/" + id + ".gif";
     img.alt = "";
     const rect = anchorEl.getBoundingClientRect();
-    img.style.left = (rect.left + rect.width / 2 - 12) + "px";
-    img.style.top  = (rect.top  + rect.height / 2 - 12) + "px";
+    const dx = (Math.random() - 0.5) * 28; // ±14px horizontal drift
+    const rot = (Math.random() - 0.5) * 40; // ±20deg rotation
+    img.style.left = (rect.left + rect.width / 2 - 15 + dx) + "px";
+    img.style.top  = (rect.top  + rect.height / 2 - 15) + "px";
+    img.style.setProperty("--rx-rot", rot + "deg");
     document.body.appendChild(img);
     img.addEventListener("animationend", () => img.remove(), { once: true });
+  }
+
+  // Find the best anchor element for a given emoji id.
+  function reactionAnchor(id) {
+    return document.querySelector("#rx-actives [data-eid='" + id + "']")
+        || document.getElementById("rx-trigger");
+  }
+
+  // Called after SSE delivers a new state; fires float animations for the delta.
+  function applyReactionDelta(oldState, newState) {
+    const oldMap = {};
+    for (const r of oldState) oldMap[r.emoji_id] = r.count || 0;
+    for (const r of newState) {
+      const delta = (r.count || 0) - (oldMap[r.emoji_id] || 0);
+      if (delta <= 0) continue;
+      const anchor = reactionAnchor(r.emoji_id);
+      if (!anchor) continue;
+      const bursts = Math.min(delta, 4); // cap at 4 floats per update
+      for (let i = 0; i < bursts; i++) {
+        setTimeout(() => spawnFloatEmoji(r.emoji_id, anchor), i * 80);
+      }
+    }
   }
 
   async function addReaction(id, anchorEl) {
@@ -1170,7 +1196,9 @@
       reactionES = es;
       es.onmessage = (ev) => {
         try {
-          reactionState = JSON.parse(ev.data);
+          const next = JSON.parse(ev.data);
+          applyReactionDelta(reactionState, next);
+          reactionState = next;
           renderReactions();
           reactionESBackoff = 1000;
         } catch (e) { /* ignore malformed frame */ }
