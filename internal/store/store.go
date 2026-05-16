@@ -77,10 +77,12 @@ CREATE TABLE IF NOT EXISTS reactions (
   emoji_id   SMALLINT NOT NULL,
   user_id    TEXT NOT NULL,
   ip         TEXT NOT NULL,
+  count      INTEGER NOT NULL DEFAULT 1,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (emoji_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS reactions_created_at_idx ON reactions (created_at);
+ALTER TABLE reactions ADD COLUMN IF NOT EXISTS count INTEGER NOT NULL DEFAULT 1;
 `)
 	return err
 }
@@ -96,7 +98,7 @@ type ReactionCount struct {
 // 24h. If userID is non-empty, Mine is set on rows the user has reacted to.
 func (s *Store) ListReactions(ctx context.Context, userID string) ([]ReactionCount, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT emoji_id, COUNT(*)::int, BOOL_OR(user_id = $1)
+		SELECT emoji_id, SUM(count)::int, BOOL_OR(user_id = $1)
 		FROM reactions
 		WHERE created_at > NOW() - INTERVAL '24 hours'
 		GROUP BY emoji_id
@@ -116,41 +118,16 @@ func (s *Store) ListReactions(ctx context.Context, userID string) ([]ReactionCou
 	return out, rows.Err()
 }
 
-// ToggleReaction adds the (emoji,user) pair if absent (or expired) and removes
-// it otherwise. Returns whether the reaction is now active for the user.
-func (s *Store) ToggleReaction(ctx context.Context, emojiID int, userID, ip string) (bool, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback()
-
-	var exists bool
-	if err := tx.QueryRowContext(ctx, `
-		SELECT EXISTS(
-		  SELECT 1 FROM reactions
-		  WHERE emoji_id = $1 AND user_id = $2
-		    AND created_at > NOW() - INTERVAL '24 hours'
-		)`, emojiID, userID).Scan(&exists); err != nil {
-		return false, err
-	}
-	if exists {
-		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM reactions WHERE emoji_id = $1 AND user_id = $2`,
-			emojiID, userID); err != nil {
-			return false, err
-		}
-		return false, tx.Commit()
-	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO reactions (emoji_id, user_id, ip)
-		VALUES ($1, $2, $3)
+// AddReaction increments the reaction count for (emoji, user), refreshing the
+// 24h window on each call so repeated clicks keep the entry active.
+func (s *Store) AddReaction(ctx context.Context, emojiID int, userID, ip string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO reactions (emoji_id, user_id, ip, count)
+		VALUES ($1, $2, $3, 1)
 		ON CONFLICT (emoji_id, user_id)
-		DO UPDATE SET created_at = NOW(), ip = EXCLUDED.ip`,
-		emojiID, userID, ip); err != nil {
-		return false, err
-	}
-	return true, tx.Commit()
+		DO UPDATE SET count = reactions.count + 1, created_at = NOW(), ip = EXCLUDED.ip`,
+		emojiID, userID, ip)
+	return err
 }
 
 // PurgeExpiredReactions removes rows older than the 24h active window.

@@ -1041,7 +1041,7 @@
   }
   const reactionUID = getReactionUserID();
   let reactionState = REACTION_IDS.map(id => ({ emoji_id: id, count: 0, mine: false }));
-  let reactionBusy = new Set();
+  const reactionCooldown = new Map(); // emoji_id -> last-click ms
 
   function renderReactions() {
     const actives = document.getElementById("rx-actives");
@@ -1057,12 +1057,12 @@
       if (!r || (r.count || 0) <= 0) continue;
       const btn = document.createElement("button");
       btn.type = "button";
-      btn.className = "item" + (r.mine ? " selected" : "") + (reactionBusy.has(id) ? " busy" : "");
-      btn.title = r.mine ? "取消贴贴" : "也贴一个";
+      btn.className = "item" + (r.mine ? " selected" : "");
+      btn.title = "再贴一个";
       btn.innerHTML =
         '<span class="emoji" style="background-image:url(\'https://chii.in/img/smiles/tv/' + id + '.gif\')"></span>' +
         '<span class="num">' + r.count + '</span>';
-      btn.addEventListener("click", (e) => { e.stopPropagation(); toggleReaction(id); });
+      btn.addEventListener("click", (e) => { e.stopPropagation(); addReaction(id, e.currentTarget); });
       actives.appendChild(btn);
     }
 
@@ -1073,10 +1073,10 @@
       const li = document.createElement("li");
       const a = document.createElement("a");
       a.href = "javascript:void(0)";
-      a.className = (r.mine ? "is-mine" : "") + (reactionBusy.has(id) ? " is-busy" : "");
-      a.title = r.mine ? "已贴贴，点击取消" : "贴贴";
+      a.className = r.mine ? "is-mine" : "";
+      a.title = "贴贴";
       a.innerHTML = '<img class="emoji" src="https://chii.in/img/smiles/tv/' + id + '.gif" alt="" loading="lazy" decoding="async">';
-      a.addEventListener("click", (e) => { e.stopPropagation(); toggleReaction(id); });
+      a.addEventListener("click", (e) => { e.stopPropagation(); addReaction(id, e.currentTarget); });
       li.appendChild(a);
       grid.appendChild(li);
     }
@@ -1116,32 +1116,40 @@
     } catch (e) { /* network glitch — keep last render */ }
   }
 
-  async function toggleReaction(id) {
-    if (reactionBusy.has(id)) return;
-    reactionBusy.add(id);
+  function spawnFloatEmoji(id, anchorEl) {
+    const img = document.createElement("img");
+    img.className = "rx-float";
+    img.src = "https://chii.in/img/smiles/tv/" + id + ".gif";
+    img.alt = "";
+    const rect = anchorEl.getBoundingClientRect();
+    img.style.left = (rect.left + rect.width / 2 - 12) + "px";
+    img.style.top  = (rect.top  + rect.height / 2 - 12) + "px";
+    document.body.appendChild(img);
+    img.addEventListener("animationend", () => img.remove(), { once: true });
+  }
+
+  async function addReaction(id, anchorEl) {
+    const now = Date.now();
+    if ((reactionCooldown.get(id) || 0) + 220 > now) return;
+    reactionCooldown.set(id, now);
+
+    spawnFloatEmoji(id, anchorEl);
+
     // Optimistic update.
-    const cur = reactionState.find(r => r.emoji_id === id) || { emoji_id: id, count: 0, mine: false };
-    cur.mine = !cur.mine;
-    cur.count = Math.max(0, (cur.count || 0) + (cur.mine ? 1 : -1));
+    let cur = reactionState.find(r => r.emoji_id === id);
+    if (!cur) { cur = { emoji_id: id, count: 0, mine: false }; reactionState.push(cur); }
+    cur.count = (cur.count || 0) + 1;
+    cur.mine = true;
     renderReactions();
+
     try {
-      const resp = await fetch("/api/reactions", {
+      await fetch("/api/reactions", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-User-ID": reactionUID },
         body: JSON.stringify({ emoji_id: id }),
       });
-      if (!resp.ok) {
-        // Roll back.
-        cur.mine = !cur.mine;
-        cur.count = Math.max(0, (cur.count || 0) + (cur.mine ? 1 : -1));
-      }
-    } catch (e) {
-      cur.mine = !cur.mine;
-      cur.count = Math.max(0, (cur.count || 0) + (cur.mine ? 1 : -1));
-    } finally {
-      reactionBusy.delete(id);
-      refreshReactions();
-    }
+    } catch (e) { /* network glitch — SSE/poll will reconcile */ }
+    refreshReactions();
   }
 
   // Live updates via SSE. Falls back silently to the 30s polling refresh.

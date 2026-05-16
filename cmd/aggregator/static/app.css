@@ -478,7 +478,7 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
   background: color-mix(in srgb, var(--brand) 10%, var(--surface));
 }
 .likes_grid .item.selected .num { color: var(--brand-ink); }
-.likes_grid .item.busy { opacity: 0.5; pointer-events: none; }
+.likes_grid .item.busy { opacity: 0.6; }
 .likes_grid .item .emoji {
   display: inline-block;
   width: 16px;
@@ -623,7 +623,21 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
   background: color-mix(in srgb, var(--brand) 14%, var(--surface));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 40%, transparent);
 }
-.rx-grid li a.is-busy { opacity: 0.5; pointer-events: none; }
+.rx-grid li a.is-busy { opacity: 0.6; }
+@keyframes rx-float-up {
+  0%   { opacity: 1; transform: translateY(0) scale(1.1); }
+  60%  { opacity: 0.9; }
+  100% { opacity: 0; transform: translateY(-48px) scale(0.6); }
+}
+.rx-float {
+  position: fixed;
+  pointer-events: none;
+  z-index: 9999;
+  width: 24px;
+  height: 24px;
+  image-rendering: pixelated;
+  animation: rx-float-up 0.65s cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
+}
 .rx-grid img.emoji {
   width: 22px;
   height: 22px;

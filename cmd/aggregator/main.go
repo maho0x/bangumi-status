@@ -522,14 +522,12 @@ func (s *server) handleReactionsToggle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return
 	}
-	active, err := s.store.ToggleReaction(r.Context(), body.EmojiID, userID, ip)
-	if err != nil {
+	if err := s.store.AddReaction(r.Context(), body.EmojiID, userID, ip); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	s.rxHub.notify()
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"active": active})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleReactionsStream pushes the full reaction count list whenever the
