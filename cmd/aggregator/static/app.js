@@ -1143,11 +1143,19 @@
     renderReactions();
 
     try {
-      await fetch("/api/reactions", {
+      const resp = await fetch("/api/reactions", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-User-ID": reactionUID },
         body: JSON.stringify({ emoji_id: id }),
       });
+      if (resp.status === 429) {
+        // Rate-limited: roll back optimistic count and shake the button.
+        cur.count = Math.max(0, (cur.count || 1) - 1);
+        renderReactions();
+        anchorEl.classList.add("rx-shake");
+        anchorEl.addEventListener("animationend", () => anchorEl.classList.remove("rx-shake"), { once: true });
+        return;
+      }
     } catch (e) { /* network glitch — SSE/poll will reconcile */ }
     refreshReactions();
   }

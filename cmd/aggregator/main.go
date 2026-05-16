@@ -468,8 +468,8 @@ var allowedReactions = map[int]bool{
 	41: true, 102: true, 49: true, 46: true, 51: true, 101: true,
 }
 
-// reactionRate throttles toggle calls per source IP (token bucket: 30/min).
-var reactionRate = newRateLimiter(30, time.Minute)
+// reactionRate throttles reaction calls per source IP (token bucket: 300/min).
+var reactionRate = newRateLimiter(300, time.Minute)
 
 func (s *server) handleReactionsList(w http.ResponseWriter, r *http.Request) {
 	userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
