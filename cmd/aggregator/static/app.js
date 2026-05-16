@@ -1113,9 +1113,10 @@
       });
       if (!resp.ok) return;
       const next = await resp.json();
-      applyReactionDelta(reactionState, next);
+      const prev = reactionState;
       reactionState = next;
       renderReactions();
+      applyReactionDelta(prev, next);
     } catch (e) { /* network glitch — keep last render */ }
   }
 
@@ -1198,9 +1199,10 @@
       es.onmessage = (ev) => {
         try {
           const next = JSON.parse(ev.data);
-          applyReactionDelta(reactionState, next);
+          const prev = reactionState;
           reactionState = next;
           renderReactions();
+          applyReactionDelta(prev, next);
           reactionESBackoff = 1000;
         } catch (e) { /* ignore malformed frame */ }
       };
