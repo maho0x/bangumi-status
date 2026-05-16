@@ -1156,7 +1156,7 @@
 
   async function addReaction(id, anchorEl) {
     const now = Date.now();
-    if ((reactionCooldown.get(id) || 0) + 220 > now) return;
+    if ((reactionCooldown.get(id) || 0) + 100 > now) return;
     reactionCooldown.set(id, now);
 
     spawnFloatEmoji(id, anchorEl);
