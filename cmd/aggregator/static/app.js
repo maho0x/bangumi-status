@@ -1126,7 +1126,7 @@
     const dx = (Math.random() - 0.5) * 28; // ±14px horizontal drift
     const rot = (Math.random() - 0.5) * 40; // ±20deg rotation
     img.style.left = (rect.left + rect.width / 2 - 15 + dx) + "px";
-    img.style.top  = (rect.top  + rect.height / 2 - 15) + "px";
+    img.style.top  = (rect.top  - 20) + "px";
     img.style.setProperty("--rx-rot", rot + "deg");
     document.body.appendChild(img);
     img.addEventListener("animationend", () => img.remove(), { once: true });
