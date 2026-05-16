@@ -1061,7 +1061,7 @@
       btn.className = "item" + (r.mine ? " selected" : "");
       btn.title = "再贴一个";
       btn.innerHTML =
-        '<span class="emoji" style="background-image:url(\'https://chii.in/img/smiles/tv/' + id + '.gif\')"></span>' +
+        '<span class="emoji" style="background-image:url(\'/smiles/' + id + '.gif\')"></span>' +
         '<span class="num">' + r.count + '</span>';
       btn.addEventListener("click", (e) => { e.stopPropagation(); addReaction(id, e.currentTarget); });
       actives.appendChild(btn);
@@ -1076,7 +1076,7 @@
       a.href = "javascript:void(0)";
       a.className = r.mine ? "is-mine" : "";
       a.title = "贴贴";
-      a.innerHTML = '<img class="emoji" src="https://chii.in/img/smiles/tv/' + id + '.gif" alt="" loading="lazy" decoding="async">';
+      a.innerHTML = '<img class="emoji" src="/smiles/' + id + '.gif" alt="" loading="lazy" decoding="async">';
       a.addEventListener("click", (e) => { e.stopPropagation(); addReaction(id, e.currentTarget); });
       li.appendChild(a);
       grid.appendChild(li);
@@ -1122,7 +1122,7 @@
   function spawnFloatEmoji(id, anchorEl) {
     const img = document.createElement("img");
     img.className = "rx-float";
-    img.src = "https://chii.in/img/smiles/tv/" + id + ".gif";
+    img.src = "/smiles/" + id + ".gif";
     img.alt = "";
     const rect = anchorEl.getBoundingClientRect();
     const dx = (Math.random() - 0.5) * 28; // ±14px horizontal drift
