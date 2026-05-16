@@ -1112,7 +1112,9 @@
         headers: { "X-User-ID": reactionUID },
       });
       if (!resp.ok) return;
-      reactionState = await resp.json();
+      const next = await resp.json();
+      applyReactionDelta(reactionState, next);
+      reactionState = next;
       renderReactions();
     } catch (e) { /* network glitch — keep last render */ }
   }
@@ -1183,7 +1185,6 @@
         return;
       }
     } catch (e) { /* network glitch — SSE/poll will reconcile */ }
-    refreshReactions();
   }
 
   // Live updates via SSE. Falls back silently to the 30s polling refresh.
