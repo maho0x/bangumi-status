@@ -31,8 +31,6 @@ type groupEntry struct {
 	Kind      types.Kind
 	Status    types.Status
 	StartedAt time.Time
-	Recovered bool
-	EndedAt   time.Time
 	GroupID   int // message_id of containing outageGroup
 }
 
@@ -218,8 +216,8 @@ func (t *Telegram) handleOutage(c types.ComponentStatus) {
 	log.Printf("telegram: outage group %d opened for %s", id, key)
 }
 
-// handleRecovery marks the entry as recovered and re-edits the group's message
-// so the recovery appears alongside the original outage report.
+// handleRecovery sends a new recovery message as a reply to the original outage
+// message, leaving the outage message itself unchanged.
 func (t *Telegram) handleRecovery(c types.ComponentStatus) {
 	key := c.Domain + "|" + string(c.Kind)
 	now := time.Now()
@@ -230,34 +228,18 @@ func (t *Telegram) handleRecovery(c types.ComponentStatus) {
 		t.mu.Unlock()
 		return
 	}
-	entry.Recovered = true
-	entry.EndedAt = now
+	dur := fmtDuration(now.Sub(entry.StartedAt))
 	delete(t.outages, key)
 
-	group := t.groups[entry.GroupID]
-	if group == nil {
-		t.mu.Unlock()
-		dur := fmtDuration(now.Sub(entry.StartedAt))
-		t.sendMessage(fmt.Sprintf("Bangumi 活了！这次炸了 <b>%s</b>\n#活了", dur), 0)
-		return
+	replyTo := 0
+	if group := t.groups[entry.GroupID]; group != nil {
+		replyTo = group.MessageID
 	}
-	text := renderGroupText(group)
-	msgID := group.MessageID
 	t.mu.Unlock()
 
-	if msgID != 0 {
-		switch t.editMessage(msgID, text) {
-		case editOK:
-			log.Printf("telegram: recovery merged into msg %d (%s)", msgID, key)
-			return
-		case editFailed:
-			log.Printf("telegram: edit failed for recovery on msg %d", msgID)
-			return
-		}
-	}
-	// editGone or no msgID — fall back to a standalone reply.
-	dur := fmtDuration(now.Sub(entry.StartedAt))
-	t.sendMessage(fmt.Sprintf("Bangumi 活了！这次炸了 <b>%s</b>\n#活了", dur), msgID)
+	text := fmt.Sprintf("Bangumi 活了！这次炸了 <b>%s</b>\n#活了", dur)
+	t.sendMessage(text, replyTo)
+	log.Printf("telegram: recovery for %s (duration %s), reply to msg %d", key, dur, replyTo)
 }
 
 func removeEntry(s []*groupEntry, target *groupEntry) []*groupEntry {
@@ -274,52 +256,35 @@ func renderGroupText(g *outageGroup) string {
 	if len(g.Entries) == 1 {
 		e := g.Entries[0]
 		label := html.EscapeString(serviceLabel(e.Domain))
-		switch {
-		case e.Recovered:
-			return fmt.Sprintf("Bangumi 活了！这次炸了 <b>%s</b>\n#活了", fmtDuration(e.EndedAt.Sub(e.StartedAt)))
-		case e.Status == types.StatusDown:
+		if e.Status == types.StatusDown {
 			return fmt.Sprintf("Bangumi 可能Boom了，这次炸的是 <b>%s</b>\n#炸了", label)
-		default:
-			return fmt.Sprintf("Bangumi 有点不对劲，<b>%s</b> 响应异常\n#降级", label)
 		}
+		return fmt.Sprintf("Bangumi 有点不对劲，<b>%s</b> 响应异常\n#降级", label)
 	}
 
-	allRecovered := true
 	anyDown := false
 	for _, e := range g.Entries {
-		if !e.Recovered {
-			allRecovered = false
-			if e.Status == types.StatusDown {
-				anyDown = true
-			}
+		if e.Status == types.StatusDown {
+			anyDown = true
+			break
 		}
 	}
 
 	var b strings.Builder
-	switch {
-	case allRecovered:
-		b.WriteString("Bangumi 全部恢复\n\n")
-	case anyDown:
+	if anyDown {
 		b.WriteString("Bangumi 可能Boom了\n\n")
-	default:
+	} else {
 		b.WriteString("Bangumi 有点不对劲\n\n")
 	}
 	for _, e := range g.Entries {
 		label := html.EscapeString(serviceLabel(e.Domain))
-		switch {
-		case e.Recovered:
-			fmt.Fprintf(&b, "✅ <b>%s</b> 已恢复（持续 %s）\n", label, fmtDuration(e.EndedAt.Sub(e.StartedAt)))
-		case e.Status == types.StatusDown:
+		if e.Status == types.StatusDown {
 			fmt.Fprintf(&b, "🔴 <b>%s</b> 中断\n", label)
-		default:
+		} else {
 			fmt.Fprintf(&b, "🟡 <b>%s</b> 响应异常\n", label)
 		}
 	}
-	if allRecovered {
-		b.WriteString("\n#活了")
-	} else {
-		b.WriteString("\n#炸了")
-	}
+	b.WriteString("\n#炸了")
 	return b.String()
 }
 

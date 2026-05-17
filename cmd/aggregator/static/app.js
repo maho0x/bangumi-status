@@ -1043,6 +1043,22 @@
   let reactionState = REACTION_IDS.map(id => ({ emoji_id: id, count: 0, mine: false }));
   const reactionCooldown = new Map(); // emoji_id -> last-click ms
 
+  function initReactionGrid() {
+    const grid = document.getElementById("rx-grid");
+    if (!grid) return;
+    for (const id of REACTION_IDS) {
+      const li = document.createElement("li");
+      const a = document.createElement("a");
+      a.href = "javascript:void(0)";
+      a.dataset.eid = id;
+      a.title = "贴贴";
+      a.innerHTML = '<img class="emoji" src="/smiles/' + id + '.gif" alt="" loading="lazy" decoding="async">';
+      a.addEventListener("click", (e) => { e.stopPropagation(); addReaction(id, e.currentTarget); });
+      li.appendChild(a);
+      grid.appendChild(li);
+    }
+  }
+
   function renderReactions() {
     const actives = document.getElementById("rx-actives");
     const grid = document.getElementById("rx-grid");
@@ -1067,19 +1083,10 @@
       actives.appendChild(btn);
     }
 
-    // Picker grid: all 12 emoji.
-    grid.innerHTML = "";
+    // Picker grid: only update is-mine class; <img> nodes are created once by initReactionGrid.
     for (const id of REACTION_IDS) {
-      const r = byID[id] || { emoji_id: id, count: 0, mine: false };
-      const li = document.createElement("li");
-      const a = document.createElement("a");
-      a.href = "javascript:void(0)";
-      a.className = r.mine ? "is-mine" : "";
-      a.title = "贴贴";
-      a.innerHTML = '<img class="emoji" src="/smiles/' + id + '.gif" alt="" loading="lazy" decoding="async">';
-      a.addEventListener("click", (e) => { e.stopPropagation(); addReaction(id, e.currentTarget); });
-      li.appendChild(a);
-      grid.appendChild(li);
+      const a = grid.querySelector("[data-eid='" + id + "']");
+      if (a) a.className = (byID[id] && byID[id].mine) ? "is-mine" : "";
     }
   }
 
@@ -1126,6 +1133,7 @@
     img.src = "/smiles/" + id + ".gif";
     img.alt = "";
     const rect = anchorEl.getBoundingClientRect();
+    if (!rect.width && !rect.height) return; // element not yet laid out
     const dx = (Math.random() - 0.5) * 28; // ±14px horizontal drift
     const rot = (Math.random() - 0.5) * 40; // ±20deg rotation
     img.style.left = (rect.left + rect.width / 2 - 15 + dx) + "px";
@@ -1191,6 +1199,7 @@
   // Live updates via SSE. Falls back silently to the 30s polling refresh.
   let reactionES = null;
   let reactionESBackoff = 1000;
+  let reactionSSEReady = false; // skip delta animation on the first (baseline) push
   function connectReactionStream() {
     if (typeof EventSource === "undefined") return;
     try {
@@ -1202,13 +1211,15 @@
           const prev = reactionState;
           reactionState = next;
           renderReactions();
-          applyReactionDelta(prev, next);
+          if (reactionSSEReady) applyReactionDelta(prev, next);
+          reactionSSEReady = true;
           reactionESBackoff = 1000;
         } catch (e) { /* ignore malformed frame */ }
       };
       es.onerror = () => {
         es.close();
         reactionES = null;
+        reactionSSEReady = false;
         // Exponential backoff up to 30s.
         setTimeout(connectReactionStream, reactionESBackoff);
         reactionESBackoff = Math.min(reactionESBackoff * 2, 30000);
@@ -1217,6 +1228,7 @@
   }
   connectReactionStream();
 
+  initReactionGrid();
   renderReactions();
 
   async function refresh() {

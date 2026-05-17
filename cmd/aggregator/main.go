@@ -942,6 +942,12 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.ResponseWriter.WriteHeader(code)
 }
 
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 type spaHandler struct{ fs fs.FS }
 
 func (s spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
