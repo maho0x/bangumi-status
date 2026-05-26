@@ -52,7 +52,8 @@ type server struct {
 	cachedAt time.Time
 	sfGroup  singleflight.Group
 
-	rxHub *reactionHub
+	rxHub     *reactionHub
+	statusHub *reactionHub
 }
 
 // reactionHub fans out "something changed" pings to active SSE subscribers.
@@ -138,7 +139,7 @@ func main() {
 	}
 	log.Printf("online counter source: %s", onlineSourceProbe)
 
-	s := &server{store: st, secret: secret, tokenPrefixes: tokenPrefixes, onlineSourceProbe: onlineSourceProbe, notifier: tg, rxHub: newReactionHub()}
+	s := &server{store: st, secret: secret, tokenPrefixes: tokenPrefixes, onlineSourceProbe: onlineSourceProbe, notifier: tg, rxHub: newReactionHub(), statusHub: newReactionHub()}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/ingest", s.handleIngest)
@@ -151,6 +152,7 @@ func main() {
 	mux.HandleFunc("GET /api/reactions", s.handleReactionsList)
 	mux.HandleFunc("POST /api/reactions", s.handleReactionsToggle)
 	mux.HandleFunc("GET /api/reactions/stream", s.handleReactionsStream)
+	mux.HandleFunc("GET /api/status/stream", s.handleStatusStream)
 
 	// Serve embedded static site at /.
 	sub, err := fs.Sub(staticFS, "static")
@@ -172,6 +174,7 @@ func main() {
 
 	go s.retentionLoop(ctx)
 	go s.cacheRefreshLoop(ctx)
+	go s.notifierLoop(ctx)
 	go s.dailyReportLoop(ctx)
 	go s.reactionPurgeLoop(ctx)
 
@@ -549,6 +552,10 @@ func (s *server) handleReactionsStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no") // disable proxy buffering (nginx/caddy)
 	flusher.Flush()
 
+	// Clear the server's WriteTimeout for this long-lived stream; otherwise
+	// every write past the 30s deadline fails and the connection churns.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+
 	ch, cleanup := s.rxHub.subscribe()
 	defer cleanup()
 
@@ -571,6 +578,64 @@ func (s *server) handleReactionsStream(w http.ResponseWriter, r *http.Request) {
 		}
 		sort.Slice(out, func(i, j int) bool { return out[i].EmojiID < out[j].EmojiID })
 		buf, err := json.Marshal(out)
+		if err != nil {
+			return false
+		}
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", buf); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+
+	if !send() {
+		return
+	}
+
+	heartbeat := time.NewTicker(25 * time.Second)
+	defer heartbeat.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ch:
+			if !send() {
+				return
+			}
+		case <-heartbeat.C:
+			if _, err := fmt.Fprintf(w, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
+func (s *server) handleStatusStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	flusher.Flush()
+
+	// Clear the server's WriteTimeout for this long-lived stream; otherwise
+	// every write past the 30s deadline fails and the connection churns.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+
+	ch, cleanup := s.statusHub.subscribe()
+	defer cleanup()
+
+	send := func() bool {
+		overall, err := s.getOverall(r.Context())
+		if err != nil {
+			return false
+		}
+		buf, err := json.Marshal(overall)
 		if err != nil {
 			return false
 		}
@@ -689,8 +754,8 @@ func (s *server) getOverall(ctx context.Context) (*types.Overall, error) {
 					s.cached = out
 					s.cachedAt = time.Now()
 					s.mu.Unlock()
-					s.notifier.Process(out.Components)
 					s.notifier.UpdateSummary(out)
+					s.statusHub.notify()
 				}
 				return nil, err
 			})
@@ -706,8 +771,8 @@ func (s *server) getOverall(ctx context.Context) (*types.Overall, error) {
 			s.cached = out
 			s.cachedAt = time.Now()
 			s.mu.Unlock()
-			s.notifier.Process(out.Components)
 			s.notifier.UpdateSummary(out)
+			s.statusHub.notify()
 		}
 		return out, err
 	})
@@ -722,7 +787,7 @@ func (s *server) computeOverall(ctx context.Context) (*types.Overall, error) {
 	results := make([]types.ComponentStatus, len(allComponents))
 
 	g, gctx := errgroup.WithContext(ctx)
-	incidentSince := time.Now().AddDate(0, 0, -14)
+	incidentSince := time.Unix(0, 0)
 
 	for i, c := range allComponents {
 		i, c := i, c
@@ -799,6 +864,35 @@ func (s *server) computeOverall(ctx context.Context) (*types.Overall, error) {
 	return out, nil
 }
 
+// computeRollups is the cheap subset of computeOverall the notifier needs:
+// per-component rolled-up status from LatestPerProbe, no Incidents walk or
+// daily-bucket aggregation.
+func (s *server) computeRollups(ctx context.Context) ([]types.ComponentStatus, error) {
+	allComponents := types.AllComponents()
+	results := make([]types.ComponentStatus, len(allComponents))
+	g, gctx := errgroup.WithContext(ctx)
+	for i, c := range allComponents {
+		i, c := i, c
+		g.Go(func() error {
+			views, err := s.store.LatestPerProbe(gctx, c.Domain, c.Kind)
+			if err != nil {
+				return err
+			}
+			status, _ := store.RollupStatus(views)
+			results[i] = types.ComponentStatus{
+				Domain: c.Domain,
+				Kind:   c.Kind,
+				Status: status,
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
 func worseThan(a, b types.Status) bool {
 	rank := map[types.Status]int{types.StatusOK: 0, types.StatusDegraded: 1, types.StatusDown: 2}
 	return rank[a] > rank[b]
@@ -868,6 +962,31 @@ func (s *server) cacheRefreshLoop(ctx context.Context) {
 		s.cachedAt = time.Time{}
 		s.mu.Unlock()
 		s.getOverall(ctx) //nolint:errcheck
+	}
+}
+
+// notifierLoop runs outage/recovery detection on a steady 20s tick. The
+// notifier debounce needs a fixed cadence; running Process inside the
+// computeOverall refresh coupled it to that refresh's duration, which grows
+// with the checks table and had stretched the effective tick to ~60s.
+func (s *server) notifierLoop(ctx context.Context) {
+	if !s.notifier.Enabled() {
+		return
+	}
+	t := time.NewTicker(20 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		comps, err := s.computeRollups(ctx)
+		if err != nil {
+			log.Printf("notifier loop: %v", err)
+			continue
+		}
+		s.notifier.Process(comps)
 	}
 }
 
@@ -947,6 +1066,10 @@ func (r *statusRecorder) Flush() {
 		f.Flush()
 	}
 }
+
+// Unwrap lets http.ResponseController reach the underlying connection (e.g. to
+// clear the write deadline for long-lived SSE streams).
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 type spaHandler struct{ fs fs.FS }
 

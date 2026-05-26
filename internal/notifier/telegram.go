@@ -24,7 +24,7 @@ type ConfigStore interface {
 
 // defaultMergeWindow groups outage/recovery notifications that occur within
 // this duration of an existing group into a single edited Telegram message.
-const defaultMergeWindow = 10 * time.Minute
+const defaultMergeWindow = 1 * time.Minute
 
 type groupEntry struct {
 	Domain    string
@@ -40,6 +40,19 @@ type outageGroup struct {
 	Entries   []*groupEntry
 }
 
+type recoveryGroup struct {
+	MessageID int
+	OpenedAt  time.Time
+	Domains   []string
+	MaxDur    time.Duration
+}
+
+type recoveryInfo struct {
+	domain  string
+	dur     time.Duration
+	replyTo int
+}
+
 // Telegram posts transition events and maintains a pinned summary message.
 // Zero value is a no-op; use NewTelegram.
 type Telegram struct {
@@ -51,14 +64,15 @@ type Telegram struct {
 
 	mergeWindow time.Duration
 
-	mu           sync.Mutex
-	last         map[string]types.Status // last-notified status per component
-	pending      map[string]pendingTxn   // transitions awaiting confirmation
-	outages      map[string]*groupEntry  // active (non-recovered) entries by key
-	groups       map[int]*outageGroup    // known groups by message_id
-	activeGroup  *outageGroup            // most-recent group that may absorb new events
-	pinnedMsgID  int
-	pinnedLoaded bool
+	mu              sync.Mutex
+	last            map[string]types.Status // last-notified status per component
+	pending         map[string]pendingTxn   // transitions awaiting confirmation
+	outages         map[string]*groupEntry  // active (non-recovered) entries by key
+	groups          map[int]*outageGroup    // known groups by message_id
+	activeGroup     *outageGroup            // most-recent outage group within merge window
+	activeRecovery  *recoveryGroup          // most-recent recovery group within merge window
+	pinnedMsgID     int
+	pinnedLoaded    bool
 }
 
 type pendingTxn struct {
@@ -91,12 +105,11 @@ func (t *Telegram) Process(comps []types.ComponentStatus) {
 		return
 	}
 
-	type action struct {
-		kind string // "outage" | "recovery"
-		comp types.ComponentStatus
-	}
-	var actions []action
+	type outageAction struct{ comp types.ComponentStatus }
+	var outages []outageAction
+	var recoveries []recoveryInfo
 
+	now := time.Now()
 	t.mu.Lock()
 	for _, c := range comps {
 		key := c.Domain + "|" + string(c.Kind)
@@ -124,9 +137,19 @@ func (t *Telegram) Process(comps []types.ComponentStatus) {
 				_, activeOutage := t.outages[key]
 				switch {
 				case current != types.StatusOK && !activeOutage:
-					actions = append(actions, action{kind: "outage", comp: c})
+					outages = append(outages, outageAction{comp: c})
 				case current == types.StatusOK && activeOutage:
-					actions = append(actions, action{kind: "recovery", comp: c})
+					entry := t.outages[key]
+					replyTo := 0
+					if group := t.groups[entry.GroupID]; group != nil {
+						replyTo = group.MessageID
+					}
+					recoveries = append(recoveries, recoveryInfo{
+						domain:  c.Domain,
+						dur:     now.Sub(entry.StartedAt),
+						replyTo: replyTo,
+					})
+					delete(t.outages, key)
 				}
 			}
 			t.last[key] = current
@@ -137,14 +160,89 @@ func (t *Telegram) Process(comps []types.ComponentStatus) {
 	}
 	t.mu.Unlock()
 
-	for _, a := range actions {
-		switch a.kind {
-		case "outage":
-			t.handleOutage(a.comp)
-		case "recovery":
-			t.handleRecovery(a.comp)
+	for _, a := range outages {
+		t.handleOutage(a.comp)
+	}
+	if len(recoveries) > 0 {
+		t.handleRecoveries(recoveries)
+	}
+}
+
+// handleRecoveries sends or edits a recovery message, merging all recoveries
+// from a single Process cycle. Within the merge window it edits the previous
+// recovery message; otherwise it sends a new one.
+func (t *Telegram) handleRecoveries(recoveries []recoveryInfo) {
+	now := time.Now()
+
+	var addDomains []string
+	var addMaxDur time.Duration
+	firstReplyTo := 0
+	for _, r := range recoveries {
+		addDomains = append(addDomains, html.EscapeString(r.domain))
+		if r.dur > addMaxDur {
+			addMaxDur = r.dur
+		}
+		if firstReplyTo == 0 {
+			firstReplyTo = r.replyTo
 		}
 	}
+
+	t.mu.Lock()
+	canMerge := t.activeRecovery != nil && now.Sub(t.activeRecovery.OpenedAt) < t.mergeWindow
+	var (
+		newRG *recoveryGroup
+		msgID int
+		text  string
+	)
+	if canMerge {
+		newRG = &recoveryGroup{
+			MessageID: t.activeRecovery.MessageID,
+			OpenedAt:  t.activeRecovery.OpenedAt,
+			Domains:   append(append([]string{}, t.activeRecovery.Domains...), addDomains...),
+			MaxDur:    t.activeRecovery.MaxDur,
+		}
+		if addMaxDur > newRG.MaxDur {
+			newRG.MaxDur = addMaxDur
+		}
+		msgID = newRG.MessageID
+	} else {
+		newRG = &recoveryGroup{OpenedAt: now, Domains: addDomains, MaxDur: addMaxDur}
+	}
+	text = renderRecoveryText(newRG)
+	t.mu.Unlock()
+
+	if canMerge {
+		switch t.editMessage(msgID, text) {
+		case editOK:
+			t.mu.Lock()
+			t.activeRecovery = newRG
+			t.mu.Unlock()
+			log.Printf("telegram: recovery merged into msg %d", msgID)
+			return
+		case editFailed:
+			log.Printf("telegram: recovery edit failed for msg %d", msgID)
+			return
+		case editGone:
+			log.Printf("telegram: recovery msg %d gone, sending new", msgID)
+			newRG = &recoveryGroup{OpenedAt: now, Domains: addDomains, MaxDur: addMaxDur}
+			text = renderRecoveryText(newRG)
+		}
+	}
+
+	id := t.sendMessage(text, firstReplyTo)
+	if id == 0 {
+		return
+	}
+	newRG.MessageID = id
+	t.mu.Lock()
+	t.activeRecovery = newRG
+	t.mu.Unlock()
+	log.Printf("telegram: recovery msg %d opened", id)
+}
+
+func renderRecoveryText(rg *recoveryGroup) string {
+	return fmt.Sprintf("Bangumi 活了！<b>%s</b> 恢复正常，这次炸了 <b>%s</b>\n#活了",
+		strings.Join(rg.Domains, "、"), fmtDuration(rg.MaxDur))
 }
 
 // handleOutage either edits the active group's message (if still within the
@@ -216,31 +314,6 @@ func (t *Telegram) handleOutage(c types.ComponentStatus) {
 	log.Printf("telegram: outage group %d opened for %s", id, key)
 }
 
-// handleRecovery sends a new recovery message as a reply to the original outage
-// message, leaving the outage message itself unchanged.
-func (t *Telegram) handleRecovery(c types.ComponentStatus) {
-	key := c.Domain + "|" + string(c.Kind)
-	now := time.Now()
-
-	t.mu.Lock()
-	entry, ok := t.outages[key]
-	if !ok {
-		t.mu.Unlock()
-		return
-	}
-	dur := fmtDuration(now.Sub(entry.StartedAt))
-	delete(t.outages, key)
-
-	replyTo := 0
-	if group := t.groups[entry.GroupID]; group != nil {
-		replyTo = group.MessageID
-	}
-	t.mu.Unlock()
-
-	text := fmt.Sprintf("Bangumi 活了！这次炸了 <b>%s</b>\n#活了", dur)
-	t.sendMessage(text, replyTo)
-	log.Printf("telegram: recovery for %s (duration %s), reply to msg %d", key, dur, replyTo)
-}
 
 func removeEntry(s []*groupEntry, target *groupEntry) []*groupEntry {
 	out := s[:0]
