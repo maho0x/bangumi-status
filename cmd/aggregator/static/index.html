@@ -15,27 +15,18 @@
 <body>
   <div class="accent-rule" aria-hidden="true"></div>
 
-  <header class="hdr">
-    <div class="container hdr-inner">
+  <main class="container" id="app">
+    <div class="page-top">
       <a class="brand" href="/">
         <span class="brand-badge" aria-hidden="true"><svg viewBox="0 0 28 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1,14 6,9 10,11 15,4 20,7 27,3"/></svg></span>
         <span class="brand-name"><span class="brand-name-italic">Bangumi</span>&nbsp;Status</span>
       </a>
-      <div class="hdr-right">
-        <nav class="hdr-nav" aria-label="Upstream sites">
-          <a href="https://bgm.tv" target="_blank" rel="noopener">bgm.tv<span class="arr">↗</span></a>
-          <a href="https://bangumi.tv" target="_blank" rel="noopener">bangumi.tv<span class="arr">↗</span></a>
-          <a href="https://chii.in" target="_blank" rel="noopener">chii.in<span class="arr">↗</span></a>
-        </nav>
-        <button class="subscribe-btn" id="subscribe-btn" type="button" aria-haspopup="dialog" aria-controls="subscribe-modal">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1.4" fill="currentColor"/></svg>
-          <span>订阅</span>
-        </button>
-      </div>
+      <button class="subscribe-btn" id="subscribe-btn" type="button" aria-haspopup="dialog" aria-controls="subscribe-modal">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1.4" fill="currentColor"/></svg>
+        <span>订阅</span>
+      </button>
     </div>
-  </header>
 
-  <main class="container" id="app">
     <section id="banner" class="banner banner--loading" aria-live="polite">
       <div class="banner__left">
         <div class="banner__icon" aria-hidden="true">
@@ -46,10 +37,7 @@
           <p class="banner__sub">正在获取探针数据……</p>
         </div>
       </div>
-      <dl class="banner__meta" id="banner-meta">
-        <div><dt>30天可用率</dt><dd class="num">—</dd></div>
-        <div><dt>在线探针</dt><dd class="num">—</dd></div>
-      </dl>
+      <dl class="banner__meta" id="banner-meta"></dl>
     </section>
 
     <div class="banner-reactions">
@@ -108,7 +96,7 @@
       <header class="section-head">
         <h2>历史事故</h2>
         <div class="section-head__right">
-          <span class="section-head__hint">最近14天</span>
+          <span class="section-head__hint">最近10天</span>
         </div>
       </header>
       <div id="past-incidents" class="inc-days"></div>

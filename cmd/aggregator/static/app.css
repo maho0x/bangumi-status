@@ -12,19 +12,19 @@
   --text-dim:     #6a6d66;
   --text-faint:   #9a9c94;
 
-  --brand:        #e28a92;
-  --brand-ink:    #b9606a;
-  --accent:       #e28a92;
+  --brand:        #f09199;
+  --brand-ink:    #F77E94;
+  --accent:       #f09199;
 
-  --ok:           #3f8f5f;
+  --ok:           #7DD9B0;
   --ok-soft:      #e5f2ea;
   --ok-line:      #b3d4bf;
 
-  --degraded:     #c4882a;
+  --degraded:     #D9C775;
   --degraded-soft:#f7ecd3;
   --degraded-line:#e3c488;
 
-  --down:         #c04e4e;
+  --down:         #D97A92;
   --down-soft:    #f4dede;
   --down-line:    #deb1b1;
 
@@ -55,19 +55,19 @@
     --text-dim:     #a7a69c;
     --text-faint:   #71736b;
 
-    --brand:        #e89ba3;
-    --brand-ink:    #f1b6bd;
-    --accent:       #e89ba3;
+    --brand:        #f4a3aa;
+    --brand-ink:    #F77E94;
+    --accent:       #f4a3aa;
 
-    --ok:           #5fb37b;
+    --ok:           #7DD9B0;
     --ok-soft:      #112418;
     --ok-line:      #23452e;
 
-    --degraded:     #e0b25b;
+    --degraded:     #D9C775;
     --degraded-soft:#2a2212;
     --degraded-line:#553f16;
 
-    --down:         #e07676;
+    --down:         #D97A92;
     --down-soft:    #2a1414;
     --down-line:    #552424;
 
@@ -111,7 +111,7 @@ h1, h2, h3 { font-weight: 600; letter-spacing: -0.015em; margin: 0; }
 }
 
 .container {
-  max-width: 1000px;
+  max-width: 800px;
   margin: 0 auto;
   padding: 0 24px;
 }
@@ -119,62 +119,38 @@ h1, h2, h3 { font-weight: 600; letter-spacing: -0.015em; margin: 0; }
 /* --- Accent top rule ------------------------------------------------------ */
 .accent-rule { display: none; }
 
-/* --- Header --------------------------------------------------------------- */
-.hdr {
-  background: color-mix(in srgb, var(--bg) 85%, transparent);
-  backdrop-filter: saturate(1.2) blur(10px);
-  -webkit-backdrop-filter: saturate(1.2) blur(10px);
-  border-bottom: 1px solid var(--border);
-  position: sticky;
-  top: 0;
-  z-index: 10;
-}
-.hdr-inner {
+/* --- Page top toolbar (brand + subscribe) --------------------------------- */
+.page-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 24px;
-  height: 60px;
+  gap: 16px;
+  margin-bottom: 28px;
 }
 .brand {
   display: inline-flex;
   align-items: baseline;
-  font-size: 17px;
+  font-size: 22px;
   color: var(--text);
 }
 .brand:hover { text-decoration: none; }
 .brand-badge {
-  width: 28px;
-  height: 18px;
+  width: 36px;
+  height: 24px;
   display: inline-flex;
   align-items: center;
   color: var(--brand-ink);
-  transform: translateY(3px);
+  transform: translateY(4px);
 }
 .brand-badge svg { width: 100%; height: 100%; }
 .brand-name { font-weight: 600; letter-spacing: -0.01em; }
 .brand-name-italic {
   font-style: italic;
   font-weight: 600;
-  font-size: 19px;
+  font-size: 25px;
   color: var(--brand-ink);
   margin-right: -2px;
 }
-
-.hdr-right {
-  display: inline-flex;
-  align-items: center;
-  gap: 22px;
-}
-.hdr-nav {
-  display: flex;
-  gap: 20px;
-  font-size: 13px;
-  color: var(--text-dim);
-}
-.hdr-nav a { display: inline-flex; align-items: center; gap: 3px; }
-.hdr-nav .arr { font-size: 10px; opacity: 0.5; transition: transform 0.15s ease, opacity 0.15s ease; }
-.hdr-nav a:hover .arr { transform: translate(1px, -1px); opacity: 0.9; }
 
 .lang-btn {
   padding: 5px 11px;
@@ -223,15 +199,13 @@ h1, h2, h3 { font-weight: 600; letter-spacing: -0.015em; margin: 0; }
 .subscribe-btn:active { transform: translateY(0); }
 
 @media (max-width: 640px) {
-  .hdr-nav { display: none; }
-  .hdr-right { gap: 0; }
   .container { padding: 0 18px; }
   .subscribe-btn span { display: none; }
   .subscribe-btn { padding: 7px 10px; }
   .subscribe-btn svg { width: 15px; height: 15px; }
 }
 
-main.container { padding-top: 40px; padding-bottom: 80px; }
+main.container { padding-top: 50px; padding-bottom: 80px; }
 
 /* --- Banner --------------------------------------------------------------- */
 .banner {
@@ -699,10 +673,26 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
 .guest-toggle[aria-pressed="true"] { color: var(--text); }
 
 /* Guest rows hidden when group lacks .show-guest — regardless of status. */
-.group:not(.show-guest) .component[data-kind="guest"] {
-  display: none;
+/* Guest rows are kept in the DOM and animated open/closed via .show-guest. */
+.component[data-kind="guest"] {
+  max-height: 280px;
+  overflow: hidden;
+  transition:
+    background 0.15s ease,
+    max-height 380ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    opacity 220ms ease,
+    padding-top 380ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    padding-bottom 380ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    border-top-width 380ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
-/* When guest row is hidden, auth becomes the visually-first row and needs no top border. */
+.group:not(.show-guest) .component[data-kind="guest"] {
+  max-height: 0;
+  opacity: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-top-width: 0;
+}
+/* When guest row is collapsed, the auth row sits flush under the header. */
 .group:not(.show-guest) .component[data-kind="guest"] + .component {
   border-top: none;
 }
@@ -800,14 +790,35 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
 /* Probe detail (expandable) */
 .probe-detail {
   grid-column: 1 / -1;
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px dashed var(--border-strong);
-  display: none;
   overflow: hidden;
   min-width: 0;
+  max-height: 0;
+  opacity: 0;
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 1px dashed var(--border-strong);
+  border-top-width: 0;
+  transition:
+    max-height 380ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    opacity 240ms ease,
+    margin-top 380ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    padding-top 380ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    border-top-width 380ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
-.component.open .probe-detail { display: block; }
+.component.open .probe-detail {
+  /* max-height inline-set by JS to scrollHeight; cleared after open animation. */
+  opacity: 1;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top-width: 1px;
+}
+.probe-detail.is-open {
+  /* After the open transition completes, drop the cap so SSE-driven probe
+     additions can grow the panel naturally. Non-interpolatable (none),
+     so no animation runs at this transition; the visual size is already
+     where it needs to be (frozen by inline maxHeight just before). */
+  max-height: none;
+}
 
 .probe-row {
   display: grid;
@@ -912,6 +923,15 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
 }
 .probe-list[hidden] {
   display: none;
+}
+.probe-list.animating {
+  overflow: hidden;
+  transition:
+    max-height 380ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    opacity 240ms ease;
+}
+.probe-list.is-collapsed {
+  opacity: 0;
 }
 .probe-card {
   background: var(--surface);
@@ -1047,14 +1067,16 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
   font-size: 10px;
   font-variant-numeric: tabular-nums;
 }
-.online-card__chart .area { fill: color-mix(in srgb, var(--brand) 18%, transparent); stroke: none; }
+.online-card__chart .area { fill: color-mix(in srgb, var(--ok) 20%, transparent); stroke: none; }
 .online-card__chart .line {
   fill: none;
-  stroke: var(--brand-ink);
+  stroke: var(--ok);
   stroke-width: 1.6;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+.online-card__chart .inc-band--degraded { fill: var(--degraded); opacity: 0.18; pointer-events: none; }
+.online-card__chart .inc-band--down     { fill: var(--down);     opacity: 0.22; pointer-events: none; }
 .online-card__chart .cursor {
   stroke: var(--text-dim);
   stroke-width: 1;
@@ -1064,7 +1086,7 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
   pointer-events: none;
 }
 .online-card__chart .marker {
-  fill: var(--brand-ink);
+  fill: var(--ok);
   stroke: var(--surface);
   stroke-width: 1.5;
   opacity: 0;
@@ -1074,7 +1096,7 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
 .online-card__chart:hover .cursor,
 .online-card__chart:hover .marker { opacity: 1; }
 .online-card__chart .peak-dot {
-  fill: var(--brand-ink);
+  fill: var(--ok);
   stroke: var(--surface);
   stroke-width: 1.5;
   pointer-events: none;
@@ -1234,8 +1256,22 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
   outline-offset: 2px;
   border-radius: 3px;
 }
+.inc-day__entry[data-kind="guest"] {
+  max-height: 160px;
+  overflow: hidden;
+  transition:
+    max-height 380ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    opacity 220ms ease,
+    padding-top 380ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    padding-bottom 380ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    border-top-width 380ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
 .inc-day:not(.show-guest) .inc-day__entry[data-kind="guest"] {
-  display: none;
+  max-height: 0;
+  opacity: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-top-width: 0;
 }
 .inc-day.has-guest .inc-day__collapsed {
   display: block;
@@ -1446,18 +1482,177 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
 /* --- Tooltip -------------------------------------------------------------- */
 .tooltip {
   position: fixed;
-  background: var(--text);
-  color: var(--bg);
-  padding: 7px 10px;
-  border-radius: 6px;
-  font-size: 11.5px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: saturate(1.4) blur(10px);
+  -webkit-backdrop-filter: saturate(1.4) blur(10px);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 9px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  letter-spacing: 0.01em;
+  pointer-events: none;
+  z-index: 50;
+  box-shadow:
+    0 1px 2px rgba(20, 18, 16, 0.04),
+    0 12px 28px -12px rgba(20, 18, 16, 0.18);
+  max-width: 280px;
+}
+
+/* Rich layout for strip-cell day tooltip. */
+.tooltip__day-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  white-space: nowrap;
+}
+.tooltip__day-date {
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.tooltip__day-rel {
+  font-size: 11px;
+  color: var(--text-faint);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  pointer-events: none;
+}
+.tooltip__day-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 7px -2px 7px;
+}
+.tooltip__day-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
   white-space: nowrap;
-  z-index: 50;
-  box-shadow: 0 6px 20px -6px rgba(0,0,0,0.25);
-  letter-spacing: 0.01em;
+}
+.tooltip__day-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text);
+}
+.tooltip__day-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.tooltip__day-status-dot.status-ok       { background: var(--ok); }
+.tooltip__day-status-dot.status-degraded { background: var(--degraded); }
+.tooltip__day-status-dot.status-down     { background: var(--down); }
+.tooltip__day-status-dot.status-none     { background: var(--none); border: 1px solid var(--border-strong); }
+.tooltip__day-uptime {
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.005em;
+  color: var(--text);
+}
+.tooltip__day-counts {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.tooltip__day-counts .sep { color: var(--text-faint); }
+.tooltip__day-counts .down    { color: var(--down); font-weight: 500; }
+.tooltip__day-counts .degrade { color: var(--degraded); font-weight: 500; }
+.tooltip__day-empty {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+/* --- Stable-DOM transitions ----------------------------------------------- */
+/* The frontend now diff-patches in place rather than rebuilding DOM, so CSS
+   transitions persist across data refreshes and play whenever a status
+   color, badge, or pill actually changes. Kept conservative on purpose. */
+
+.strip-cell {
+  transition: background 320ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.banner__icon {
+  transition: background 360ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.banner__title, .banner__sub {
+  transition: color 280ms ease;
+}
+.status-dot {
+  transition: background 280ms ease;
+}
+.inc-card {
+  transition: border-left-color 280ms ease, background 280ms ease;
+}
+.inc-day__dot {
+  transition: background 280ms ease;
+}
+.guest-badge {
+  transition: background 280ms ease;
+}
+.probe-card .pill {
+  transition: background 280ms ease, color 280ms ease, border-color 280ms ease;
+}
+
+/* --- Online chart tab-switch entry animations ---------------------------- */
+/* Only plays when `.is-switching` is added by the tab-click handler. The
+   regular ~20s SSE auto-refresh redraws skip this class so the chart stays
+   visually quiet during background updates. */
+.online-card__chart.is-switching .line {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: chart-line-draw 720ms cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
+}
+@keyframes chart-line-draw {
+  to { stroke-dashoffset: 0; }
+}
+.online-card__chart.is-switching .area {
+  opacity: 0;
+  animation: chart-fade-in 720ms cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
+}
+.online-card__chart.is-switching .peak-dot,
+.online-card__chart.is-switching .peak-label,
+.online-card__chart.is-switching .axis {
+  opacity: 0;
+  animation: chart-fade-in 520ms 240ms cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
+}
+.online-card__chart.is-switching .grid {
+  opacity: 0;
+  animation: chart-fade-in-grid 520ms 240ms cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
+}
+.online-card__chart.is-switching .inc-band--down {
+  opacity: 0;
+  animation: chart-fade-in-band-down 520ms 240ms cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
+}
+.online-card__chart.is-switching .inc-band--degraded {
+  opacity: 0;
+  animation: chart-fade-in-band-degraded 520ms 240ms cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
+}
+@keyframes chart-fade-in {
+  to { opacity: 1; }
+}
+@keyframes chart-fade-in-grid {
+  to { opacity: 0.55; }
+}
+@keyframes chart-fade-in-band-down {
+  to { opacity: 0.22; }
+}
+@keyframes chart-fade-in-band-degraded {
+  to { opacity: 0.18; }
 }
 
 /* --- Reduced motion ------------------------------------------------------- */

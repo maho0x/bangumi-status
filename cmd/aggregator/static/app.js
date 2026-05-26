@@ -52,7 +52,7 @@
       legend_down: "Outage", legend_none: "No data",
 
       section_unresolved: "Unresolved incidents",
-      section_past: "Past incidents", hint_past: "Last 14 days",
+      section_past: "Past incidents", hint_past: "Last 10 days",
       section_probes: "Probe nodes",
       section_online: "User activity",
       online_hint_24h: "last 24 hours",
@@ -122,7 +122,7 @@
       legend_down: "中断", legend_none: "无数据",
 
       section_unresolved: "未解决的事故",
-      section_past: "历史事故", hint_past: "最近14天",
+      section_past: "历史事故", hint_past: "最近10天",
       section_probes: "探针节点",
       section_online: "在线人数",
       online_hint_24h: "最近24小时",
@@ -183,6 +183,10 @@
   };
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const ZH_MONTHS = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十", "十一", "十二"];
+  const WEEKDAYS_EN = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const WEEKDAYS_ZH = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+  const escapeHTML = (s) => String(s).replace(/[&<>"']/g, c =>
+    ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
 
   const ICONS = {
     ok: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 12.5 10 17.5 19 7.5"/></svg>',
@@ -206,6 +210,47 @@
     }
     return n;
   };
+
+  // --- Diff/patch helpers --------------------------------------------------
+  // Stable-DOM update primitives. Keeping nodes alive across re-renders lets
+  // CSS transitions play across data changes (e.g. strip cell color shifts)
+  // and preserves user state (open panels, scroll, hover) without snapshots.
+
+  // Reconcile parent's keyed children with `items`. Children matched/reused
+  // by getKey, created when missing, deleted when absent, and re-ordered to
+  // match `items`. Static (non-reconciled) children — those without `_rk` —
+  // are left alone so a fixed header can coexist with a reconciled body.
+  function reconcile(parent, items, getKey, makeNode, updateNode) {
+    const existing = new Map();
+    for (const child of parent.children) {
+      if (child._rk != null) existing.set(child._rk, child);
+    }
+    const skipStatic = (n) => { while (n && n._rk == null) n = n.nextSibling; return n; };
+    let cursor = skipStatic(parent.firstChild);
+    const seen = new Set();
+    for (const item of items) {
+      const k = String(getKey(item));
+      seen.add(k);
+      let node = existing.get(k);
+      if (node) updateNode(node, item);
+      else { node = makeNode(item); node._rk = k; }
+      if (cursor === node) {
+        cursor = skipStatic(node.nextSibling);
+      } else {
+        parent.insertBefore(node, cursor);
+      }
+    }
+    for (const [k, n] of existing) if (!seen.has(k)) n.remove();
+  }
+
+  const setText  = (n, txt) => { const s = String(txt); if (n.textContent !== s) n.textContent = s; };
+  const setClass = (n, cls) => { if (n.className !== cls) n.className = cls; };
+  const setAttr  = (n, name, val) => {
+    if (val == null || val === false) { if (n.hasAttribute(name)) n.removeAttribute(name); return; }
+    const v = String(val);
+    if (n.getAttribute(name) !== v) n.setAttribute(name, v);
+  };
+  const setHTML = (n, html) => { if (n._html !== html) { n.innerHTML = html; n._html = html; } };
 
   const fmtRelative = (ts) => {
     if (!ts) return t("never");
@@ -277,8 +322,12 @@
 
   // --- Tooltip -------------------------------------------------------------
   const tip = document.getElementById("tooltip");
-  const showTip = (e, text) => {
-    tip.textContent = text;
+  const showTip = (e, content) => {
+    if (typeof content === "object" && content && content.html != null) {
+      tip.innerHTML = content.html;
+    } else {
+      tip.textContent = String(content);
+    }
     tip.hidden = false;
     const r = e.currentTarget.getBoundingClientRect();
     const tw = tip.offsetWidth;
@@ -304,23 +353,29 @@
       if ((rank[c.status] || 0) > (rank[status] || 0)) status = c.status;
     }
 
-    banner.className = "banner banner--" + status;
-    banner.querySelector(".banner__icon").innerHTML = ICONS[status] || ICONS.loading;
-    banner.querySelector(".banner__title").textContent = t("banner_" + status) || overall.message || "Status";
+    setClass(banner, "banner banner--" + status);
+    setHTML(banner.querySelector(".banner__icon"), ICONS[status] || ICONS.loading);
+    setText(banner.querySelector(".banner__title"), t("banner_" + status) || overall.message || "Status");
 
     const affected = nonGuest.filter(c => c.status !== "ok");
     const total = nonGuest.length;
-    banner.querySelector(".banner__sub").textContent = affected.length === 0
-      ? t("banner_sub_all", total)
-      : t("banner_sub_affected", affected.length, total);
+    setText(banner.querySelector(".banner__sub"),
+      affected.length === 0 ? t("banner_sub_all", total) : t("banner_sub_affected", affected.length, total));
 
     const avg = nonGuest.reduce((a, c) => a + (c.uptime || 0), 0) / (nonGuest.length || 1);
-    const online = overall.probes.filter(p => p.online).length;
+    reconcile(meta, [{ key: "uptime", label: t("uptime_30d"), value: fmtUptime(avg) }],
+      it => it.key,
+      it => {
+        const dt = el("dt", {}, it.label);
+        const dd = el("dd", { class: "num" }, it.value);
+        const div = el("div", {}, [dt, dd]);
+        div._dt = dt; div._dd = dd;
+        return div;
+      },
+      (div, it) => { setText(div._dt, it.label); setText(div._dd, it.value); }
+    );
 
-    meta.innerHTML = "";
-    meta.appendChild(el("div", {}, [el("dt", {}, t("uptime_30d")), el("dd", { class: "num" }, fmtUptime(avg))]));
-
-    document.getElementById("updated").textContent = fmtRelative(overall.updated_at);
+    setText(document.getElementById("updated"), fmtRelative(overall.updated_at));
   }
 
   // --- Unresolved incidents ------------------------------------------------
@@ -328,61 +383,81 @@
     const section = document.getElementById("unresolved-section");
     const list = document.getElementById("unresolved-list");
     const summary = document.getElementById("unresolved-summary");
-    list.innerHTML = "";
 
-    const affected = (overall.components || []).filter(c => c.status && c.status !== "ok");
-    if (affected.length === 0) { section.hidden = true; return; }
-    section.hidden = false;
-    summary.textContent = t("affected", affected.length);
-
-    for (const c of affected) {
-      const views = c.probe_views || [];
-      const badProbes = views.filter(v => v.status === "down" || v.status === "degraded");
-      const regions = [...new Set(badProbes.map(v => v.region))].filter(Boolean);
-      const metaBits = [];
-      metaBits.push(el("span", { class: "mono" }, t("detected") + " " + fmtRelative(c.last_check)));
-      if (regions.length > 0) {
-        metaBits.push(el("span", { class: "sep" }, "·"));
-        metaBits.push(el("span", {}, t("reported_from") + " " + regions.map(r => REGION_LABEL[r] || r).join(", ")));
-      }
-      if (badProbes.length > 0 && views.length > 0) {
-        metaBits.push(el("span", { class: "sep" }, "·"));
-        metaBits.push(el("span", {}, t("probes_failing", badProbes.length, views.length)));
-      }
-
-      list.appendChild(el("div", { class: "inc-card inc-card--" + c.status }, [
-        el("div", { class: "inc-card__icon", html: ICONS[c.status] || ICONS.degraded }),
-        el("div", { class: "inc-card__body" }, [
-          el("div", { class: "inc-card__title" }, [
-            el("span", { class: "inc-title__sev" }, t("incident_" + c.status) || "Incident"),
-            document.createTextNode(" — " + componentLabel(c)),
-          ]),
-          el("div", { class: "inc-card__meta" }, metaBits),
-        ]),
-      ]));
+    const affected = (overall.components || []).filter(c => c.status && c.status !== "ok" && c.kind !== "guest");
+    if (affected.length === 0) {
+      section.hidden = true;
+      list.replaceChildren();
+      return;
     }
+    section.hidden = false;
+    setText(summary, t("affected", affected.length));
+
+    reconcile(list, affected,
+      c => c.domain + "|" + c.kind,
+      c => {
+        const icon = el("div", { class: "inc-card__icon" });
+        const sev = el("span", { class: "inc-title__sev" });
+        const title = el("div", { class: "inc-card__title" }, [sev]);
+        const meta = el("div", { class: "inc-card__meta" });
+        const card = el("div", { class: "inc-card" }, [
+          icon,
+          el("div", { class: "inc-card__body" }, [title, meta]),
+        ]);
+        card._icon = icon; card._sev = sev; card._title = title; card._meta = meta;
+        updateUnresolvedCard(card, c);
+        return card;
+      },
+      (card, c) => updateUnresolvedCard(card, c)
+    );
+  }
+
+  function updateUnresolvedCard(card, c) {
+    setClass(card, "inc-card inc-card--" + c.status);
+    setHTML(card._icon, ICONS[c.status] || ICONS.degraded);
+    setText(card._sev, t("incident_" + c.status) || "Incident");
+    // Keep the trailing component-name text node up to date in place.
+    const trailingText = " — " + componentLabel(c);
+    let trailing = card._sev.nextSibling;
+    if (trailing && trailing.nodeType === 3) {
+      if (trailing.nodeValue !== trailingText) trailing.nodeValue = trailingText;
+    } else {
+      card._title.appendChild(document.createTextNode(trailingText));
+    }
+    const views = c.probe_views || [];
+    const badProbes = views.filter(v => v.status === "down" || v.status === "degraded");
+    const regions = [...new Set(badProbes.map(v => v.region))].filter(Boolean);
+    const bits = [el("span", { class: "mono" }, t("detected") + " " + fmtRelative(c.last_check))];
+    if (regions.length > 0) {
+      bits.push(el("span", { class: "sep" }, "·"));
+      bits.push(el("span", {}, t("reported_from") + " " + regions.map(r => REGION_LABEL[r] || r).join(", ")));
+    }
+    if (badProbes.length > 0 && views.length > 0) {
+      bits.push(el("span", { class: "sep" }, "·"));
+      bits.push(el("span", {}, t("probes_failing", badProbes.length, views.length)));
+    }
+    card._meta.replaceChildren(...bits);
   }
 
   // --- Past incidents ------------------------------------------------------
   function renderPastIncidents(overall) {
     const container = document.getElementById("past-incidents");
-    container.innerHTML = "";
 
     const comps = overall.components || [];
     if (comps.length === 0) {
-      container.appendChild(el("div", { class: "inc-day__none" }, t("no_data")));
+      container.replaceChildren(el("div", { class: "inc-day__none" }, t("no_data")));
       return;
     }
 
-    // Collect all incident windows across components within last 14 days,
+    // Collect all incident windows across components within last 10 days,
     // indexed by UTC day of start_ts so a single event stays on one row.
     const byDay = new Map();
-    // Seed last 14 days (from canonical day bucket list) so empty days still render.
-    const canonical = (comps[0].days || []).slice().reverse().slice(0, 14);
+    // Seed last 10 days (from canonical day bucket list) so empty days still render.
+    const canonical = (comps[0].days || []).slice().reverse().slice(0, 10);
     for (const b of canonical) byDay.set(b.day, []);
 
     const nowSec = Math.floor(Date.now() / 1000);
-    const cutoff = nowSec - 14 * 86400;
+    const cutoff = nowSec - 10 * 86400;
 
     for (const c of comps) {
       for (const inc of (c.incidents || [])) {
@@ -393,101 +468,134 @@
       }
     }
 
-    // Skip any unresolved window whose end is still "now" — that's already
-    // shown in the unresolved-incidents section above.
-    const unresolvedStarts = new Set();
-    for (const c of comps) {
-      if (c.status && c.status !== "ok" && (c.incidents || []).length) {
-        const last = c.incidents[c.incidents.length - 1];
-        if (last && nowSec - last.end_ts < 240) unresolvedStarts.add(c.domain + "|" + c.kind + "|" + last.start_ts);
-      }
-    }
-
     const sortedDays = [...byDay.keys()].sort().reverse();
-
-    for (const iso of sortedDays) {
+    const daysData = sortedDays.map(iso => {
       const entries = byDay.get(iso).slice().sort((a, b) => {
         if (b.start_ts !== a.start_ts) return b.start_ts - a.start_ts;
         const rank = { down: 0, degraded: 1 };
         return (rank[a.status] ?? 9) - (rank[b.status] ?? 9);
       });
-
       let hasGuest = false, hasAuth = false;
       for (const inc of entries) {
         if (inc.kind === "guest") hasGuest = true;
         else if (inc.kind === "auth") hasAuth = true;
       }
+      return { iso, entries, hasGuest, hasAuth };
+    });
 
-      const dayBlock = el("div", { class: "inc-day" + (hasGuest ? " has-guest" : "") + (hasAuth ? " has-auth" : ""), "data-day": iso });
-      const rel = fmtDayRelative(iso);
-      dayBlock.appendChild(el("div", { class: "inc-day__date" }, [
-        document.createTextNode(fmtDayLabel(iso)),
-        rel ? el("span", { class: "inc-day__rel" }, rel) : null,
-      ]));
+    reconcile(container, daysData, d => d.iso,
+      d => createDayBlock(d),
+      (block, d) => updateDayBlock(block, d)
+    );
+  }
 
-      if (entries.length === 0) {
-        dayBlock.appendChild(el("div", { class: "inc-day__none" }, t("no_incidents")));
-      } else {
-        const listEl = el("div", { class: "inc-day__list" });
-        for (const inc of entries) {
-          const endIso = isoDayLocal(inc.end_ts);
-          const crossDay = endIso !== iso;
-          const isOngoing = nowSec - inc.end_ts < 240;
-          const endLabel = isOngoing ? t("ongoing") : (fmtTimeLocal(inc.end_ts) + (crossDay ? "⁺¹" : ""));
-          const timeRange = fmtTimeLocal(inc.start_ts) + " – " + endLabel;
-          const peakBits = [];
-          if (inc.peak_down && inc.peak_total) {
-            peakBits.push(t("peak_failing", inc.peak_down, inc.peak_total));
-          }
-          peakBits.push(fmtDuration(inc.end_ts - inc.start_ts));
-          const descText = timeRange + " · " + peakBits.join(" · ");
+  function createDayBlock(d) {
+    const dateEl = el("div", { class: "inc-day__date" });
+    const listEl = el("div", { class: "inc-day__list" });
+    const noneEl = el("div", { class: "inc-day__none" });
+    const collapsed = el("div", { class: "inc-day__collapsed", role: "button", tabindex: "0" });
+    const dayBlock = el("div", { class: "inc-day", "data-day": d.iso }, [dateEl, listEl, collapsed]);
 
-          listEl.appendChild(el("div", { class: "inc-day__entry", "data-kind": inc.kind || "" }, [
-            el("span", { class: "inc-day__dot status-" + inc.status }),
-            el("div", { class: "label" }, [
-              el("span", { class: "sev sev--" + inc.status }, t("incident_" + inc.status) || "Incident"),
-              document.createTextNode(" — "),
-              el("span", { class: "comp" }, inc.component),
-              el("span", { class: "desc" }, descText),
-            ]),
-            el("span", { class: "metric" }, fmtRelative(inc.end_ts)),
-          ]));
-        }
-        dayBlock.appendChild(listEl);
-        if (hasGuest) {
-          const guestCount = entries.filter(e => e.kind === "guest").length;
-          const updateLabel = () => {
-            collapsed.textContent = dayBlock.classList.contains("show-guest")
-              ? t("expanded_guest_hint", guestCount)
-              : t("collapsed_guest_hint", guestCount);
-          };
-          const toggle = () => {
-            dayBlock.classList.toggle("show-guest");
-            updateLabel();
-          };
-          const collapsed = el("div", {
-            class: "inc-day__collapsed",
-            role: "button",
-            tabindex: "0",
-            "data-guest-count": String(guestCount),
-            onclick: toggle,
-            onkeydown: (e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                toggle();
-              }
-            },
-          }, t("collapsed_guest_hint", guestCount));
-          dayBlock.appendChild(collapsed);
-        }
+    const toggle = () => {
+      dayBlock.classList.toggle("show-guest");
+      const guestCount = Number(collapsed.dataset.guestCount || 0);
+      setText(collapsed, dayBlock.classList.contains("show-guest")
+        ? t("expanded_guest_hint", guestCount)
+        : t("collapsed_guest_hint", guestCount));
+    };
+    collapsed.addEventListener("click", toggle);
+    collapsed.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+    });
+
+    dayBlock._dateEl = dateEl;
+    dayBlock._listEl = listEl;
+    dayBlock._noneEl = noneEl;
+    dayBlock._collapsed = collapsed;
+    updateDayBlock(dayBlock, d);
+    return dayBlock;
+  }
+
+  function updateDayBlock(dayBlock, d) {
+    // Preserve the user's manual show-guest toggle across re-renders.
+    const userExpanded = dayBlock.classList.contains("show-guest");
+    const classes = ["inc-day"];
+    if (d.hasGuest) classes.push("has-guest");
+    if (d.hasAuth) classes.push("has-auth");
+    if (userExpanded) classes.push("show-guest");
+    setClass(dayBlock, classes.join(" "));
+    setAttr(dayBlock, "data-day", d.iso);
+
+    // Date header — rebuild children (only 1-2 nodes) for simplicity.
+    const rel = fmtDayRelative(d.iso);
+    const dateChildren = [document.createTextNode(fmtDayLabel(d.iso))];
+    if (rel) dateChildren.push(el("span", { class: "inc-day__rel" }, rel));
+    dayBlock._dateEl.replaceChildren(...dateChildren);
+
+    if (d.entries.length === 0) {
+      dayBlock._listEl.replaceChildren();
+      if (!dayBlock.contains(dayBlock._noneEl)) {
+        dayBlock.insertBefore(dayBlock._noneEl, dayBlock._listEl.nextSibling);
       }
-
-      container.appendChild(dayBlock);
+      setText(dayBlock._noneEl, t("no_incidents"));
+    } else {
+      if (dayBlock._noneEl.parentNode) dayBlock._noneEl.remove();
+      reconcile(dayBlock._listEl, d.entries,
+        e => `${e.kind}|${e.start_ts}|${e.component}`,
+        e => createIncEntry(e),
+        (entryEl, e) => updateIncEntry(entryEl, e)
+      );
     }
+
+    if (d.hasGuest) {
+      const guestCount = d.entries.filter(e => e.kind === "guest").length;
+      dayBlock._collapsed.dataset.guestCount = String(guestCount);
+      setText(dayBlock._collapsed, userExpanded
+        ? t("expanded_guest_hint", guestCount)
+        : t("collapsed_guest_hint", guestCount));
+    } else {
+      setText(dayBlock._collapsed, "");
+    }
+  }
+
+  function createIncEntry(inc) {
+    const dot = el("span", { class: "inc-day__dot" });
+    const label = el("div", { class: "label" });
+    const metric = el("span", { class: "metric" });
+    const e = el("div", { class: "inc-day__entry" }, [dot, label, metric]);
+    e._dot = dot; e._label = label; e._metric = metric;
+    updateIncEntry(e, inc);
+    return e;
+  }
+
+  function updateIncEntry(entryEl, inc) {
+    setAttr(entryEl, "data-kind", inc.kind || "");
+    setClass(entryEl._dot, "inc-day__dot status-" + inc.status);
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    const endIso = isoDayLocal(inc.end_ts);
+    const startIso = isoDayLocal(inc.start_ts);
+    const crossDay = endIso !== startIso;
+    const isOngoing = nowSec - inc.end_ts < 240;
+    const endLabel = isOngoing ? t("ongoing") : (fmtTimeLocal(inc.end_ts) + (crossDay ? "⁺¹" : ""));
+    const timeRange = fmtTimeLocal(inc.start_ts) + " – " + endLabel;
+    const peakBits = [];
+    if (inc.peak_down && inc.peak_total) peakBits.push(t("peak_failing", inc.peak_down, inc.peak_total));
+    peakBits.push(fmtDuration(inc.end_ts - inc.start_ts));
+    const descText = timeRange + " · " + peakBits.join(" · ");
+
+    entryEl._label.replaceChildren(
+      el("span", { class: "sev sev--" + inc.status }, t("incident_" + inc.status) || "Incident"),
+      document.createTextNode(" — "),
+      el("span", { class: "comp" }, inc.component),
+      el("span", { class: "desc" }, descText),
+    );
+    setText(entryEl._metric, fmtRelative(inc.end_ts));
   }
 
   // --- Online users chart --------------------------------------------------
   let onlineRange = "24h";
+  let onlineIncidents = []; // incident windows from main-site auth components
 
   function drawOnlineChart(rawPts) {
     const chartEl = document.getElementById("online-chart");
@@ -556,13 +664,25 @@
     const peakLabelDx = peakLabelAnchor === "end" ? -8 : 8;
     const peakLabelY = peakY < padT + 14 ? peakY + 14 : peakY - 6;
 
+    const nowTs = Math.floor(Date.now() / 1000);
+    const incBands = onlineIncidents
+      .filter(inc => (inc.end_ts || nowTs) > t0 && inc.start_ts < tN)
+      .sort((a, b) => (a.status === "down" ? 1 : -1) - (b.status === "down" ? 1 : -1))
+      .map(inc => {
+        const bx1 = Math.max(xFor(inc.start_ts), padL);
+        const bx2 = Math.min(xFor(inc.end_ts || nowTs), padL + iw);
+        const bw = Math.max(1, bx2 - bx1);
+        return `<rect class="inc-band--${inc.status}" x="${bx1.toFixed(1)}" y="${padT}" width="${bw.toFixed(1)}" height="${ih}"/>`;
+      }).join("");
+
     chartEl.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="online users over time">
       ${yTicks.map(tk => `<line class="grid" x1="${padL}" y1="${tk.y.toFixed(1)}" x2="${W - padR}" y2="${tk.y.toFixed(1)}"/>`).join("")}
       ${yTicks.map(tk => `<text class="axis" x="${padL - 6}" y="${(tk.y + 3).toFixed(1)}" text-anchor="end">${tk.v.toLocaleString()}</text>`).join("")}
       <text class="axis" x="${padL}" y="${H - 5}">${xLabelStart}</text>
       <text class="axis" x="${W - padR}" y="${H - 5}" text-anchor="end">${xLabelEnd}</text>
+      ${incBands}
       <path class="area" d="${area}"/>
-      <path class="line" d="${line}"/>
+      <path class="line" d="${line}" pathLength="1"/>
       <circle class="peak-dot" cx="${peakX.toFixed(1)}" cy="${peakY.toFixed(1)}" r="3.5"/>
       <text class="peak-label" x="${(peakX + peakLabelDx).toFixed(1)}" y="${peakLabelY.toFixed(1)}" text-anchor="${peakLabelAnchor}">${peakLabel}</text>
       <line class="cursor" x1="0" y1="${padT}" x2="0" y2="${padT + ih}"/>
@@ -612,6 +732,16 @@
   function renderOnlineChart(overall) {
     const noteEl = document.getElementById("online-note");
     if (noteEl) noteEl.textContent = t("online_note");
+
+    // Collect incident windows from the three main sites (auth kind only).
+    const mainDomains = new Set(["bgm.tv", "bangumi.tv", "chii.in"]);
+    onlineIncidents = [];
+    for (const c of (overall.components || [])) {
+      if (!mainDomains.has(c.domain) || c.kind !== "auth") continue;
+      for (const inc of (c.incidents || [])) {
+        if (inc && inc.status && inc.status !== "ok") onlineIncidents.push(inc);
+      }
+    }
     // Wire up range tabs once
     const tabsEl = document.getElementById("online-tabs");
     if (tabsEl && !tabsEl._wired) {
@@ -631,7 +761,14 @@
         try {
           const res = await fetch(`/api/online?range=${range}`);
           const pts = await res.json();
+          // Mark this redraw as user-initiated so the entry animation plays.
+          // Auto-refresh redraws every ~20s skip this and remain silent.
+          if (chartEl) chartEl.classList.add("is-switching");
           drawOnlineChart(pts);
+          if (chartEl) {
+            clearTimeout(chartEl._switchTimer);
+            chartEl._switchTimer = setTimeout(() => chartEl.classList.remove("is-switching"), 900);
+          }
         } catch (_) {}
       });
     }
@@ -646,151 +783,308 @@
   }
 
   // --- Component row -------------------------------------------------------
-  function renderComponent(c) {
+  // Animated open/close for the probe-detail panel inside a component row.
+  // Measures scrollHeight at the moment of toggle so the height transition
+  // matches the actual content size (varies with probe count).
+  function toggleProbeDetail(row) {
+    const detail = row._detail;
+    const isOpen = row.classList.contains("open");
+    clearTimeout(detail._animTimer);
+
+    if (isOpen) {
+      // Closing: freeze current open size, drop the uncapped state, then ramp to 0.
+      detail.style.maxHeight = detail.scrollHeight + "px";
+      detail.classList.remove("is-open");
+      void detail.offsetHeight;
+      row.classList.remove("open");
+      detail.style.maxHeight = "0px";
+      detail._animTimer = setTimeout(() => { detail.style.maxHeight = ""; }, 440);
+    } else {
+      // Opening: ramp height from 0 → scrollHeight, then mark uncapped so future
+      // SSE-driven probe additions can grow the panel beyond the recorded value.
+      row.classList.add("open");
+      detail.style.maxHeight = detail.scrollHeight + "px";
+      detail._animTimer = setTimeout(() => {
+        if (row.classList.contains("open")) {
+          detail.classList.add("is-open");
+          detail.style.maxHeight = "";
+        }
+      }, 440);
+    }
+  }
+
+  function createComponent(c) {
+    const dot = el("span", { class: "status-dot" });
+    const labelText = el("span", { class: "label-text" });
+    const statusText = el("span", { class: "status-text" });
+    const strip = el("div", { class: "strip" });
+    const mid = el("span", { class: "mid" });
+    const toggleCount = el("span", { class: "probe-toggle__count" });
+    const detail = el("div", { class: "probe-detail" });
+
     const row = el("div", {
       class: "component",
       "data-key": `${c.domain}-${c.kind}`,
       "data-kind": c.kind || "",
-      "data-status": c.status || "none",
-    });
-
-    const label = el("div", { class: "component-label" }, [
-      el("span", { class: "status-dot status-" + (c.status || "none") }),
-      el("span", { class: "label-text" }, kindLabel(c)),
-      el("span", { class: "status-text" }, "· " + (t("status_" + c.status) || "unknown")),
+    }, [
+      el("div", { class: "component-label" }, [dot, labelText, statusText]),
+      el("div", { class: "component-right" }, [
+        strip,
+        mid,
+        el("button", {
+          class: "probe-toggle",
+          type: "button",
+          "aria-label": "toggle probe detail",
+          onclick: () => toggleProbeDetail(row),
+        }, [toggleCount, el("span", { class: "probe-toggle__chevron" })]),
+      ]),
+      detail,
     ]);
-    row.appendChild(label);
 
-    const right = el("div", { class: "component-right" });
-    const strip = el("div", { class: "strip" });
+    row._dot = dot; row._label = labelText; row._statusText = statusText;
+    row._strip = strip; row._mid = mid; row._toggleCount = toggleCount; row._detail = detail;
+    return row;
+  }
 
-    const days = c.days || [];
-    for (const d of days) {
-      const cls = d.total === 0 ? "cell-none" : "cell-" + (d.status || "none");
-      strip.appendChild(el("div", {
-        class: "strip-cell " + cls,
-        onmouseenter: (e) => showTip(e, tooltipForDay(d)),
-        onmouseleave: hideTip,
-      }));
-    }
-    // Pad empty cells if local "today" is ahead of the last UTC bucket.
+  function updateComponent(row, c) {
+    setAttr(row, "data-status", c.status || "none");
+    setClass(row._dot, "status-dot status-" + (c.status || "none"));
+    setText(row._label, kindLabel(c));
+    setText(row._statusText, "· " + (t("status_" + c.status) || "unknown"));
+    setText(row._mid, fmtUptime(c.uptime) + " " + t("uptime_label"));
+    const views = c.probe_views || [];
+    setText(row._toggleCount, String(views.length));
+    reconcileStrip(row._strip, c.days || []);
+    reconcileProbeDetail(row._detail, views);
+  }
+
+  function reconcileStrip(stripEl, days) {
+    // Build cell list including any "padding" days (today not yet bucketed).
+    const cells = days.slice();
     const todayIso = isoDayLocal(Math.floor(Date.now() / 1000));
     let lastDay = days[days.length - 1]?.day;
     while (lastDay && lastDay < todayIso) {
       const [y, m, d] = lastDay.split("-").map(Number);
       const next = new Date(y, m - 1, d + 1);
       lastDay = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-${String(next.getDate()).padStart(2, "0")}`;
-      strip.appendChild(el("div", {
-        class: "strip-cell cell-none",
-        onmouseenter: (e) => showTip(e, `${lastDay} · no data`),
-        onmouseleave: hideTip,
-      }));
+      cells.push({ day: lastDay, total: 0, status: "none" });
     }
-
-    const views = c.probe_views || [];
-    const toggle = el("button", {
-      class: "probe-toggle",
-      type: "button",
-      "aria-label": "toggle probe detail",
-      onclick: () => row.classList.toggle("open"),
-    }, [
-      el("span", { class: "probe-toggle__count" }, String(views.length)),
-      el("span", { class: "probe-toggle__chevron" }),
-    ]);
-
-    right.appendChild(strip);
-    right.appendChild(el("span", { class: "mid" }, fmtUptime(c.uptime) + " " + t("uptime_label")));
-    right.appendChild(toggle);
-    row.appendChild(right);
-
-    const detail = el("div", { class: "probe-detail" });
-    if (views.length > 0) {
-      const listEl = el("div");
-      for (const v of views) {
-        listEl.appendChild(el("div", { class: "probe-row" }, [
-          el("span", { class: "probe-name" }, (v.region ? regionFlag(v.region) + " " : "") + v.probe),
-          el("span", { class: "probe-err" }, v.err || (v.http_code ? `HTTP ${v.http_code}` : "—")),
-          el("span", { class: "probe-lat" }, v.latency_ms != null ? v.latency_ms + " ms" : "—"),
-          el("span", { class: "probe-status" }, [
-            el("span", { class: "status-dot status-" + (v.status || "none") }),
-            el("span", {}, t("status_" + v.status) || "—"),
-          ]),
-        ]));
+    reconcile(stripEl, cells, d => d.day,
+      d => {
+        const cell = el("div", {});
+        cell._dayData = d;
+        // Read fresh data on each hover so SSE updates are reflected in tooltip.
+        cell.addEventListener("mouseenter", e => showTip(e, tooltipForDay(cell._dayData)));
+        cell.addEventListener("mouseleave", hideTip);
+        setClass(cell, "strip-cell " + (d.total === 0 ? "cell-none" : "cell-" + (d.status || "none")));
+        return cell;
+      },
+      (cell, d) => {
+        setClass(cell, "strip-cell " + (d.total === 0 ? "cell-none" : "cell-" + (d.status || "none")));
+        cell._dayData = d;
       }
-      detail.appendChild(listEl);
-    } else {
-      detail.appendChild(el("div", {
-        class: "probe-row",
-        style: "color:var(--text-faint);grid-template-columns:1fr",
-      }, t("no_probe_data_detail")));
-    }
-    row.appendChild(detail);
-
-    return row;
+    );
   }
 
   function tooltipForDay(d) {
-    if (!d.total) return `${d.day} · no data`;
-    const bits = [`${d.total} checks`];
-    if (d.down) bits.push(`${d.down} down`);
-    if (d.degrade) bits.push(`${d.degrade} degraded`);
-    return `${d.day} · ${fmtUptime(d.uptime)} · ${bits.join(", ")}`;
+    const dateLabel = fmtDayLabel(d.day);
+    const rel = fmtDayRelative(d.day);
+    const wd = weekdayShort(d.day);
+    const headRel = rel || wd;
+    const headerHTML =
+      `<div class="tooltip__day-head">` +
+        `<span class="tooltip__day-date">${escapeHTML(dateLabel)}</span>` +
+        (headRel ? `<span class="tooltip__day-rel">${escapeHTML(headRel)}</span>` : "") +
+      `</div>`;
+
+    if (!d.total) {
+      return { html:
+        headerHTML +
+        `<div class="tooltip__day-divider"></div>` +
+        `<div class="tooltip__day-empty">` +
+          `<span class="tooltip__day-status-dot status-none"></span>` +
+          `<span>${escapeHTML(t("no_probe_data"))}</span>` +
+        `</div>`
+      };
+    }
+
+    const status = d.status || "ok";
+    const checksLabel = lang === "zh" ? "次检查" : (d.total === 1 ? "check" : "checks");
+    const parts = [`<span>${d.total.toLocaleString()} ${checksLabel}</span>`];
+    if (d.down) parts.push(`<span class="down">${escapeHTML(t("failed_count", d.down))}</span>`);
+    if (d.degrade) parts.push(`<span class="degrade">${escapeHTML(t("degraded_count", d.degrade))}</span>`);
+    const countsHTML = parts.join(`<span class="sep">·</span>`);
+
+    return { html:
+      headerHTML +
+      `<div class="tooltip__day-divider"></div>` +
+      `<div class="tooltip__day-meta">` +
+        `<span class="tooltip__day-status">` +
+          `<span class="tooltip__day-status-dot status-${status}"></span>` +
+          `<span>${escapeHTML(t("status_" + status))}</span>` +
+        `</span>` +
+        `<span class="tooltip__day-uptime">${escapeHTML(fmtUptime(d.uptime))}</span>` +
+      `</div>` +
+      `<div class="tooltip__day-counts">${countsHTML}</div>`
+    };
+  }
+
+  function weekdayShort(isoDay) {
+    if (!isoDay) return "";
+    const [y, m, d] = isoDay.split("-").map(Number);
+    if (!y || !m || !d) return "";
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    const idx = dt.getUTCDay();
+    return (lang === "zh" ? WEEKDAYS_ZH : WEEKDAYS_EN)[idx];
+  }
+
+  function reconcileProbeDetail(detail, views) {
+    if (views.length === 0) {
+      if (detail._mode !== "empty") {
+        detail.replaceChildren(el("div", {
+          class: "probe-row",
+          style: "color:var(--text-faint);grid-template-columns:1fr",
+        }, t("no_probe_data_detail")));
+        detail._mode = "empty";
+      }
+      return;
+    }
+    detail._mode = "list";
+    reconcile(detail, views,
+      v => (v.region || "") + "|" + v.probe,
+      v => {
+        const name = el("span", { class: "probe-name" });
+        const err = el("span", { class: "probe-err" });
+        const lat = el("span", { class: "probe-lat" });
+        const dot = el("span", { class: "status-dot" });
+        const sLabel = el("span", { class: "status-label" });
+        const r = el("div", { class: "probe-row" }, [
+          name, err, lat,
+          el("span", { class: "probe-status" }, [dot, sLabel]),
+        ]);
+        r._name = name; r._err = err; r._lat = lat; r._dot = dot; r._sLabel = sLabel;
+        updateProbeRow(r, v);
+        return r;
+      },
+      (r, v) => updateProbeRow(r, v)
+    );
+  }
+
+  function updateProbeRow(r, v) {
+    setText(r._name, (v.region ? regionFlag(v.region) + " " : "") + v.probe);
+    setText(r._err, v.err || (v.http_code ? `HTTP ${v.http_code}` : "—"));
+    setText(r._lat, v.latency_ms != null ? v.latency_ms + " ms" : "—");
+    setClass(r._dot, "status-dot status-" + (v.status || "none"));
+    setText(r._sLabel, t("status_" + v.status) || "—");
   }
 
   // --- Component groups ----------------------------------------------------
   function renderComponents(overall) {
     const container = document.getElementById("components");
-    container.innerHTML = "";
-
     const byDomain = {};
-    for (const c of overall.components) {
+    for (const c of overall.components || []) {
       (byDomain[c.domain] = byDomain[c.domain] || []).push(c);
     }
+    const orderedDomains = ["bgm.tv", "bangumi.tv", "chii.in", "next.bgm.tv", "next.bgm.tv/p1", "api.bgm.tv"]
+      .filter(d => (byDomain[d] || []).length > 0);
+    const groupsData = orderedDomains.map(domain => ({ domain, comps: byDomain[domain] }));
 
-    for (const domain of ["bgm.tv", "bangumi.tv", "chii.in", "next.bgm.tv", "next.bgm.tv/p1", "api.bgm.tv"]) {
-      const comps = byDomain[domain] || [];
-      if (comps.length === 0) continue;
-      const hasGuest = comps.some(c => c.kind === "guest");
-      const hasAuth  = comps.some(c => c.kind === "auth");
-      const guestIssue = comps.some(c => c.kind === "guest" && c.status && c.status !== "ok");
-      const group = el("div", { class: "group" + (guestIssue || !hasAuth ? " show-guest" : ""), "data-domain": domain });
+    reconcile(container, groupsData, g => g.domain,
+      g => createGroup(g),
+      (groupEl, g) => updateGroup(groupEl, g)
+    );
+  }
 
-      const hdrRight = el("div", { class: "group-hdr-right" });
-      const guestBad = comps.filter(c => c.kind === "guest" && c.status && c.status !== "ok");
-      if (guestBad.length > 0) {
-        const worst = guestBad.some(c => c.status === "down") ? "down" : "degraded";
-        hdrRight.appendChild(el("span", {
-          class: "guest-badge guest-badge--" + worst,
-          title: t("collapsed_guest_hint", guestBad.length),
-        }, String(guestBad.length)));
+  function createGroup(g) {
+    const hasGuest = g.comps.some(c => c.kind === "guest");
+    const hasAuth = g.comps.some(c => c.kind === "auth");
+    const guestIssue = g.comps.some(c => c.kind === "guest" && c.status && c.status !== "ok");
+    const groupEl = el("div", {
+      class: "group" + (guestIssue || !hasAuth ? " show-guest" : ""),
+      "data-domain": g.domain,
+    });
+    const domainDot = el("span", { class: "status-dot" });
+    const hdrRight = el("div", { class: "group-hdr-right" });
+    const hdr = el("div", { class: "group-hdr" }, [
+      el("span", { class: "domain-name" }, [domainDot, document.createTextNode(g.domain)]),
+      hdrRight,
+    ]);
+    groupEl.appendChild(hdr);
+    groupEl._domainDot = domainDot;
+    groupEl._hdrRight = hdrRight;
+    groupEl._hasToggle = false;
+    if (hasGuest && hasAuth) {
+      const labelEl = el("span", { class: "guest-toggle__label" }, guestIssue ? t("guest_hide") : t("guest_show"));
+      const btn = el("button", {
+        class: "guest-toggle",
+        type: "button",
+        "aria-pressed": guestIssue ? "true" : "false",
+        onclick: (e) => {
+          const shown = groupEl.classList.toggle("show-guest");
+          e.currentTarget.setAttribute("aria-pressed", shown ? "true" : "false");
+          labelEl.textContent = shown ? t("guest_hide") : t("guest_show");
+        },
+      }, [el("span", { class: "guest-toggle__chevron", "aria-hidden": "true" }), labelEl]);
+      hdrRight.appendChild(btn);
+      groupEl._hasToggle = true;
+      groupEl._toggleBtn = btn;
+      groupEl._toggleLabel = labelEl;
+    }
+    updateGroup(groupEl, g);
+    return groupEl;
+  }
+
+  function updateGroup(groupEl, g) {
+    setClass(groupEl._domainDot, "status-dot status-" + groupStatus(g.comps));
+
+    // Maintain the guest-badge (count of failing public endpoints).
+    const guestBad = g.comps.filter(c => c.kind === "guest" && c.status && c.status !== "ok");
+    let badge = groupEl._hdrRight.querySelector(".guest-badge");
+    if (guestBad.length > 0) {
+      const worst = guestBad.some(c => c.status === "down") ? "down" : "degraded";
+      if (!badge) {
+        badge = el("span", { class: "guest-badge guest-badge--" + worst });
+        groupEl._hdrRight.insertBefore(badge, groupEl._hdrRight.firstChild);
       }
-      if (hasGuest && hasAuth) {
-        const btn = el("button", {
-          class: "guest-toggle",
-          type: "button",
-          "aria-pressed": guestIssue ? "true" : "false",
-          onclick: (e) => {
-            const shown = group.classList.toggle("show-guest");
-            e.currentTarget.setAttribute("aria-pressed", shown ? "true" : "false");
-            e.currentTarget.querySelector(".guest-toggle__label").textContent =
-              shown ? t("guest_hide") : t("guest_show");
-          },
-        }, [
-          el("span", { class: "guest-toggle__chevron", "aria-hidden": "true" }),
-          el("span", { class: "guest-toggle__label" }, guestIssue ? t("guest_hide") : t("guest_show")),
-        ]);
-        hdrRight.appendChild(btn);
-      }
+      setClass(badge, "guest-badge guest-badge--" + worst);
+      setText(badge, String(guestBad.length));
+      badge.title = t("collapsed_guest_hint", guestBad.length);
+    } else if (badge) {
+      badge.remove();
+    }
 
-      group.appendChild(el("div", { class: "group-hdr" }, [
-        el("span", { class: "domain-name" }, [
-          el("span", { class: "status-dot status-" + groupStatus(comps) }),
-          domain,
-        ]),
-        hdrRight,
-      ]));
-      for (const c of comps) group.appendChild(renderComponent(c));
-      container.appendChild(group);
+    // Refresh the guest-toggle label so a language switch picks it up.
+    if (groupEl._hasToggle && groupEl._toggleLabel) {
+      const shown = groupEl.classList.contains("show-guest");
+      setText(groupEl._toggleLabel, shown ? t("guest_hide") : t("guest_show"));
+    }
+
+    reconcileComponentRows(groupEl, g.comps);
+  }
+
+  function reconcileComponentRows(groupEl, comps) {
+    const existing = new Map();
+    for (const child of groupEl.children) {
+      if (child.classList.contains("component")) existing.set(child.getAttribute("data-key"), child);
+    }
+    const seen = new Set();
+    let cursor = groupEl.querySelector(".group-hdr").nextSibling;
+    while (cursor && !cursor.classList?.contains("component")) cursor = cursor.nextSibling;
+    for (const c of comps) {
+      const key = `${c.domain}-${c.kind}`;
+      seen.add(key);
+      let row = existing.get(key);
+      if (!row) row = createComponent(c);
+      updateComponent(row, c);
+      if (cursor === row) {
+        cursor = row.nextSibling;
+        while (cursor && !cursor.classList?.contains("component")) cursor = cursor.nextSibling;
+      } else {
+        groupEl.insertBefore(row, cursor);
+      }
+    }
+    for (const [k, row] of existing) {
+      if (!seen.has(k)) row.remove();
     }
   }
 
@@ -807,29 +1101,36 @@
   function renderProbes(overall) {
     const list = document.getElementById("probe-list");
     const summary = document.getElementById("probes-summary");
-    list.innerHTML = "";
-
     const probes = overall.probes || [];
     if (probes.length === 0) {
-      summary.textContent = "—";
-      list.appendChild(el("div", {
+      setText(summary, "—");
+      list.replaceChildren(el("div", {
         style: "color:var(--text-faint);font-size:13px;padding:12px 2px",
       }, t("no_probes")));
       return;
     }
-
     const online = probes.filter(p => p.online).length;
-    summary.textContent = t("probe_online_summary", online, probes.length);
+    setText(summary, t("probe_online_summary", online, probes.length));
+    reconcile(list, probes,
+      p => p.name,
+      p => {
+        const name = el("div", { class: "name" });
+        const region = el("div", { class: "region" });
+        const pill = el("span", { class: "pill" });
+        const card = el("div", { class: "probe-card" }, [el("div", {}, [name, region]), pill]);
+        card._name = name; card._region = region; card._pill = pill;
+        updateProbeCard(card, p);
+        return card;
+      },
+      (card, p) => updateProbeCard(card, p)
+    );
+  }
 
-    for (const p of probes) {
-      list.appendChild(el("div", { class: "probe-card " + (p.online ? "online" : "offline") }, [
-        el("div", {}, [
-          el("div", { class: "name" }, p.name),
-          el("div", { class: "region" }, (p.region ? regionFlag(p.region) + " " : "") + (REGION_LABEL[p.region] || p.region) + " · " + fmtRelative(p.last_seen)),
-        ]),
-        el("span", { class: "pill" }, p.online ? t("probe_pill_online") : t("probe_pill_offline")),
-      ]));
-    }
+  function updateProbeCard(card, p) {
+    setClass(card, "probe-card " + (p.online ? "online" : "offline"));
+    setText(card._name, p.name);
+    setText(card._region, (p.region ? regionFlag(p.region) + " " : "") + (REGION_LABEL[p.region] || p.region) + " · " + fmtRelative(p.last_seen));
+    setText(card._pill, p.online ? t("probe_pill_online") : t("probe_pill_offline"));
   }
 
   // --- Static i18n ---------------------------------------------------------
@@ -953,20 +1254,9 @@
   let lastData = null;
 
   function render(data) {
-    // Save user expansion states before re-rendering
-    const openComponents = new Set();
-    document.querySelectorAll('.component.open').forEach(el => openComponents.add(el.getAttribute('data-key')));
-    const showGuestGroups = new Set();
-    document.querySelectorAll('.group.show-guest').forEach(el => showGuestGroups.add(el.getAttribute('data-domain')));
-    const hiddenGuestGroups = new Set();
-    document.querySelectorAll('.group:not(.show-guest)').forEach(el => hiddenGuestGroups.add(el.getAttribute('data-domain')));
-    const expandedDays = new Set();
-    document.querySelectorAll('.inc-day.show-guest').forEach(el => {
-      const day = el.getAttribute('data-day');
-      if (day) expandedDays.add(day);
-    });
-    const probesExpanded = document.getElementById('probes-toggle')?.getAttribute('aria-expanded') === 'true';
-
+    // With diff/patch render, DOM nodes (and therefore user state like
+    // .open / .show-guest, hover, scroll) survive across re-renders.
+    // No save/restore dance needed.
     renderBanner(data);
     refreshReactions();
     renderUnresolvedIncidents(data);
@@ -974,56 +1264,48 @@
     renderOnlineChart(data);
     renderPastIncidents(data);
     renderProbes(data);
-
-    // Restore expansion states
-    document.querySelectorAll('.component').forEach(el => {
-      if (openComponents.has(el.getAttribute('data-key'))) el.classList.add('open');
-    });
-    document.querySelectorAll('.group').forEach(el => {
-      const domain = el.getAttribute('data-domain');
-      if (hiddenGuestGroups.has(domain)) {
-        el.classList.remove('show-guest');
-        const btn = el.querySelector('.guest-toggle');
-        if (btn) {
-          btn.setAttribute('aria-pressed', 'false');
-          btn.querySelector('.guest-toggle__label').textContent = t('guest_show');
-        }
-      } else if (showGuestGroups.has(domain)) {
-        el.classList.add('show-guest');
-        const btn = el.querySelector('.guest-toggle');
-        if (btn) {
-          btn.setAttribute('aria-pressed', 'true');
-          btn.querySelector('.guest-toggle__label').textContent = t('guest_hide');
-        }
-      }
-    });
-    document.querySelectorAll('.inc-day').forEach(el => {
-      const day = el.getAttribute('data-day');
-      if (day && expandedDays.has(day)) {
-        el.classList.add('show-guest');
-        const collapsed = el.querySelector('.inc-day__collapsed');
-        if (collapsed && collapsed.dataset.guestCount) {
-          const n = Number(collapsed.dataset.guestCount);
-          collapsed.textContent = t('expanded_guest_hint', n);
-        }
-      }
-    });
-    if (probesExpanded) {
-      const pt = document.getElementById('probes-toggle');
-      const pl = document.getElementById('probe-list');
-      if (pt) pt.setAttribute('aria-expanded', 'true');
-      if (pl) pl.hidden = false;
-    }
   }
 
-  // Probes section toggle (collapsed by default)
+  // Probes section toggle (collapsed by default).
+  // Animated open/close: measure scrollHeight on transition start so the
+  // max-height transition matches the actual content size. The `hidden`
+  // attribute is only re-applied after the close animation completes so
+  // accessibility tooling still sees the panel as hidden when collapsed.
   const probesToggle = document.getElementById("probes-toggle");
   const probeList = document.getElementById("probe-list");
   if (probesToggle && probeList) {
+    let animTimer = null;
+    const open = () => {
+      clearTimeout(animTimer);
+      probeList.hidden = false;
+      probeList.classList.add("animating", "is-collapsed");
+      probeList.style.maxHeight = "0px";
+      void probeList.offsetHeight;          // commit collapsed state
+      probeList.classList.remove("is-collapsed");
+      probeList.style.maxHeight = probeList.scrollHeight + "px";
+      animTimer = setTimeout(() => {
+        probeList.classList.remove("animating");
+        probeList.style.maxHeight = "";     // release cap so DOM updates can grow
+      }, 440);
+    };
+    const close = () => {
+      clearTimeout(animTimer);
+      probeList.classList.add("animating");
+      probeList.style.maxHeight = probeList.scrollHeight + "px";
+      void probeList.offsetHeight;          // commit current size
+      probeList.classList.add("is-collapsed");
+      probeList.style.maxHeight = "0px";
+      animTimer = setTimeout(() => {
+        probeList.classList.remove("animating", "is-collapsed");
+        probeList.hidden = true;
+        probeList.style.maxHeight = "";
+      }, 440);
+    };
     const toggle = () => {
       const expanded = probesToggle.getAttribute("aria-expanded") === "true";
       probesToggle.setAttribute("aria-expanded", String(!expanded));
-      probeList.hidden = expanded;
+      if (expanded) close();
+      else open();
     };
     probesToggle.addEventListener("click", toggle);
     probesToggle.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
@@ -1120,10 +1402,8 @@
       });
       if (!resp.ok) return;
       const next = await resp.json();
-      const prev = reactionState;
       reactionState = next;
       renderReactions();
-      applyReactionDelta(prev, next);
     } catch (e) { /* network glitch — keep last render */ }
   }
 
@@ -1247,8 +1527,36 @@
     }
   }
 
+  // Live status updates via SSE for low latency. The 30s poll below always
+  // runs as a safety net — a dropped or zombie SSE connection can never freeze
+  // the page. Whichever delivers first wins; both just call render().
+  let statusES = null;
+  let statusESBackoff = 1000;
+  function connectStatusStream() {
+    if (typeof EventSource === "undefined") return;
+    try {
+      const es = new EventSource("/api/status/stream");
+      statusES = es;
+      es.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data);
+          lastData = data;
+          render(data);
+          statusESBackoff = 1000;
+        } catch (e) { /* ignore malformed frame */ }
+      };
+      es.onerror = () => {
+        es.close();
+        statusES = null;
+        setTimeout(connectStatusStream, statusESBackoff);
+        statusESBackoff = Math.min(statusESBackoff * 2, 30000);
+      };
+    } catch (e) { /* SSE unavailable — poll only */ }
+  }
+
   applyI18n();
   refresh();
+  connectStatusStream();
   setInterval(refresh, 30000);
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) refresh();
