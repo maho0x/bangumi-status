@@ -6,6 +6,7 @@
   <meta name="color-scheme" content="light dark">
   <title>Bangumi Status</title>
   <meta name="description" content="Independent availability monitor for bgm.tv, bangumi.tv, chii.in and the Bangumi API, probed from multiple regions.">
+  <link rel="canonical" href="https://bgm-status.ry.mk/">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23f09199'/%3E%3Ctext x='8' y='12' font-family='Georgia,serif' font-style='italic' font-size='11' font-weight='600' text-anchor='middle' fill='white'%3EB%3C/text%3E%3C/svg%3E">
   <link rel="alternate" type="application/atom+xml" title="Bangumi Status · Incidents" href="/api/feed.atom">
   <link rel="preconnect" href="https://fonts.bunny.net" crossorigin>
@@ -21,10 +22,16 @@
         <span class="brand-badge" aria-hidden="true"><svg viewBox="0 0 28 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1,14 6,9 10,11 15,4 20,7 27,3"/></svg></span>
         <span class="brand-name"><span class="brand-name-italic">Bangumi</span>&nbsp;Status</span>
       </a>
-      <button class="subscribe-btn" id="subscribe-btn" type="button" aria-haspopup="dialog" aria-controls="subscribe-modal">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1.4" fill="currentColor"/></svg>
-        <span>订阅</span>
-      </button>
+      <div class="page-actions">
+        <nav class="top-nav" aria-label="页面">
+          <a href="/" data-route-link="status">状态</a>
+          <a href="/stats" data-route-link="wiki">透视</a>
+        </nav>
+        <button class="subscribe-btn" id="subscribe-btn" type="button" aria-haspopup="dialog" aria-controls="subscribe-modal">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1.4" fill="currentColor"/></svg>
+          <span>订阅</span>
+        </button>
+      </div>
     </div>
 
     <section id="banner" class="banner banner--loading" aria-live="polite">
@@ -50,6 +57,62 @@
         <ul class="grid rx-grid" id="rx-grid" role="menu"></ul>
       </div>
     </div>
+
+    <section id="wiki-stats-page" class="wiki-page" aria-label="维基透视" hidden>
+      <header class="wiki-hero">
+        <div class="wiki-hero__text">
+          <h1>透视</h1>
+          <p>全站每日新增的注册用户、收藏、主题与回复数据。</p>
+        </div>
+        <dl class="wiki-hero__meta">
+          <div>
+            <dt>最近抓取</dt>
+            <dd class="num" id="wiki-scraped-at">—</dd>
+          </div>
+          <div>
+            <dt>数据日期</dt>
+            <dd class="num" id="wiki-source-day">—</dd>
+          </div>
+        </dl>
+      </header>
+
+      <div id="wiki-stats-summary" class="wiki-summary"></div>
+      <div id="wiki-stats-error" class="wiki-error" hidden>暂无数据。</div>
+
+      <div class="wiki-charts">
+        <section class="wiki-chart-block">
+          <header class="section-head">
+            <h2>注册用户</h2>
+            <span class="section-head__hint">每日新增</span>
+          </header>
+          <div id="chartCommunityRegister" class="wiki-chart"></div>
+        </section>
+
+        <section class="wiki-chart-block">
+          <header class="section-head">
+            <h2>收藏数</h2>
+            <span class="section-head__hint">按收藏类型</span>
+          </header>
+          <div id="chartCommunityCollection" class="wiki-chart"></div>
+        </section>
+
+        <section class="wiki-chart-block">
+          <header class="section-head">
+            <h2>主题数</h2>
+            <span class="section-head__hint">按来源</span>
+          </header>
+          <div id="chartCommunityTopics" class="wiki-chart"></div>
+        </section>
+
+        <section class="wiki-chart-block">
+          <header class="section-head">
+            <h2>回复数</h2>
+            <span class="section-head__hint">按来源</span>
+          </header>
+          <div id="chartCommunityReplies" class="wiki-chart"></div>
+        </section>
+      </div>
+    </section>
 
     <section id="unresolved-section" class="inc-section inc-section--unresolved" aria-label="未解决的事故" hidden>
       <header class="section-head">

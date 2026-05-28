@@ -5,6 +5,7 @@ import (
 	"bangumi-status/internal/region"
 	"bangumi-status/internal/store"
 	"bangumi-status/internal/types"
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"embed"
@@ -13,6 +14,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -26,7 +28,6 @@ import (
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
-
 )
 
 //go:embed static
@@ -45,6 +46,7 @@ type server struct {
 	// recorded. Multiple probes scrape bangumi.tv at different offsets and see
 	// slightly different values; trusting one source avoids systematic bias.
 	onlineSourceProbe string
+	wikiStatsURL      string
 	notifier          *notifier.Telegram
 
 	mu       sync.RWMutex
@@ -52,8 +54,17 @@ type server struct {
 	cachedAt time.Time
 	sfGroup  singleflight.Group
 
+	feedMu    sync.Mutex
+	feedCache cachedAtomFeed
+
 	rxHub     *reactionHub
 	statusHub *reactionHub
+}
+
+type cachedAtomFeed struct {
+	base     string
+	body     []byte
+	cachedAt time.Time
 }
 
 // reactionHub fans out "something changed" pings to active SSE subscribers.
@@ -139,13 +150,25 @@ func main() {
 	}
 	log.Printf("online counter source: %s", onlineSourceProbe)
 
-	s := &server{store: st, secret: secret, tokenPrefixes: tokenPrefixes, onlineSourceProbe: onlineSourceProbe, notifier: tg, rxHub: newReactionHub(), statusHub: newReactionHub()}
+	wikiStatsURL := os.Getenv("WIKI_STATS_URL")
+	if wikiStatsURL == "" {
+		wikiStatsURL = "https://chii.in/wiki/stats"
+	}
+	wikiStatsCfg := wikiStatsConfig{
+		url:       wikiStatsURL,
+		userAgent: bangumiUserAgent(),
+		cookie:    bangumiCookieFromEnv(),
+		interval:  durationFromEnv("WIKI_STATS_INTERVAL", time.Hour),
+	}
+
+	s := &server{store: st, secret: secret, tokenPrefixes: tokenPrefixes, onlineSourceProbe: onlineSourceProbe, wikiStatsURL: wikiStatsURL, notifier: tg, rxHub: newReactionHub(), statusHub: newReactionHub()}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/ingest", s.handleIngest)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/mini", s.handleMini)
 	mux.HandleFunc("GET /api/online", s.handleOnline)
+	mux.HandleFunc("GET /api/wiki-stats", s.handleWikiStats)
 	mux.HandleFunc("GET /api/probes", s.handleProbes)
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /api/feed.atom", s.handleFeed)
@@ -172,11 +195,18 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	// Create today's + nearby partitions before any ingest hits — inserts into
+	// the partitioned `checks` will fail if no matching range partition exists.
+	if err := s.store.EnsureChecksPartitions(ctx, 2); err != nil {
+		log.Fatalf("ensure checks partitions: %v", err)
+	}
+
 	go s.retentionLoop(ctx)
 	go s.cacheRefreshLoop(ctx)
 	go s.notifierLoop(ctx)
 	go s.dailyReportLoop(ctx)
 	go s.reactionPurgeLoop(ctx)
+	go s.wikiStatsLoop(ctx, wikiStatsCfg)
 
 	go func() {
 		log.Printf("listening on %s db=%s", *addr, *dbDSN)
@@ -261,12 +291,14 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.store.UpsertProbe(r.Context(), p.Probe, p.Region, time.Now().Unix())
-	if p.OnlineCount > 0 && p.Probe == s.onlineSourceProbe {
+	if p.OnlineCount > 0 {
 		ts := p.OnlineTS
 		if ts == 0 {
 			ts = time.Now().Unix()
 		}
-		_ = s.store.InsertOnline(r.Context(), ts, p.OnlineCount)
+		// Accept any probe's reading. The store keeps canonical samples when
+		// available and uses non-canonical ones as outage-time fallback.
+		_ = s.store.InsertOnline(r.Context(), ts, p.OnlineCount, p.Probe == s.onlineSourceProbe)
 	}
 
 	// Note: we do NOT invalidate the cache here. The 14 probes ingest every
@@ -343,6 +375,25 @@ func (s *server) handleOnline(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(pts)
 }
 
+func (s *server) handleWikiStats(w http.ResponseWriter, r *http.Request) {
+	points, scrapedAt, err := s.store.WikiStats(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if points == nil {
+		points = []types.WikiStatsPoint{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"updated_at": time.Now().Unix(),
+		"scraped_at": scrapedAt,
+		"source_url": s.wikiStatsURL,
+		"data":       points,
+	})
+}
+
 func (s *server) handleProbes(w http.ResponseWriter, r *http.Request) {
 	ps, err := s.store.Probes(r.Context())
 	if err != nil {
@@ -375,12 +426,12 @@ type atomAuthor struct {
 }
 
 type atomEntry struct {
-	ID      string    `xml:"id"`
-	Title   string    `xml:"title"`
-	Link    atomLink  `xml:"link"`
-	Updated string    `xml:"updated"`
-	Summary atomText  `xml:"summary"`
-	Content atomText  `xml:"content"`
+	ID      string   `xml:"id"`
+	Title   string   `xml:"title"`
+	Link    atomLink `xml:"link"`
+	Updated string   `xml:"updated"`
+	Summary atomText `xml:"summary"`
+	Content atomText `xml:"content"`
 }
 
 type atomText struct {
@@ -401,14 +452,63 @@ func (s *server) handleFeed(w http.ResponseWriter, r *http.Request) {
 	}
 	base := scheme + "://" + host
 
-	entries := make([]atomEntry, 0)
-	for _, c := range types.AllComponents() {
-		buckets, err := s.store.DailyBuckets(r.Context(), c.Domain, c.Kind, 30)
+	body, ok := s.cachedFeed(base)
+	if !ok {
+		overall, err := s.getCachedOverall()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		body, err = buildAtomFeed(base, host, overall)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		for _, b := range buckets {
+		s.setCachedFeed(base, body)
+	}
+
+	w.Header().Set("Content-Type", "application/atom+xml; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	_, _ = w.Write(body)
+}
+
+func (s *server) getCachedOverall() (*types.Overall, error) {
+	s.mu.RLock()
+	cached := s.cached
+	s.mu.RUnlock()
+	if cached == nil {
+		return nil, errors.New("status cache is warming up")
+	}
+	return cached, nil
+}
+
+func (s *server) cachedFeed(base string) ([]byte, bool) {
+	s.feedMu.Lock()
+	defer s.feedMu.Unlock()
+	if s.feedCache.base != base || len(s.feedCache.body) == 0 {
+		return nil, false
+	}
+	if time.Since(s.feedCache.cachedAt) >= 5*time.Minute {
+		return nil, false
+	}
+	body := append([]byte(nil), s.feedCache.body...)
+	return body, true
+}
+
+func (s *server) setCachedFeed(base string, body []byte) {
+	s.feedMu.Lock()
+	defer s.feedMu.Unlock()
+	s.feedCache = cachedAtomFeed{
+		base:     base,
+		body:     append([]byte(nil), body...),
+		cachedAt: time.Now(),
+	}
+}
+
+func buildAtomFeed(base, host string, overall *types.Overall) ([]byte, error) {
+	entries := make([]atomEntry, 0)
+	for _, c := range overall.Components {
+		for _, b := range c.Days {
 			if b.Total == 0 || b.Status == types.StatusOK {
 				continue
 			}
@@ -442,27 +542,35 @@ func (s *server) handleFeed(w http.ResponseWriter, r *http.Request) {
 		entries = entries[:50]
 	}
 
+	updated := time.Now().UTC()
+	if overall.UpdatedAt > 0 {
+		updated = time.Unix(overall.UpdatedAt, 0).UTC()
+	}
 	feed := atomFeed{
-		Xmlns:   "http://www.w3.org/2005/Atom",
-		Title:   "Bangumi Status · Incidents",
-		Link:    []atomLink{
+		Xmlns: "http://www.w3.org/2005/Atom",
+		Title: "Bangumi Status · Incidents",
+		Link: []atomLink{
 			{Href: base + "/api/feed.atom", Rel: "self", Type: "application/atom+xml"},
 			{Href: base + "/", Rel: "alternate", Type: "text/html"},
 		},
 		ID:      "tag:" + host + ":feed",
-		Updated: time.Now().UTC().Format(time.RFC3339),
+		Updated: updated.Format(time.RFC3339),
 		Author:  atomAuthor{Name: "Bangumi Status"},
 		Entries: entries,
 	}
 
-	w.Header().Set("Content-Type", "application/atom+xml; charset=utf-8")
-	w.Header().Set("Cache-Control", "public, max-age=60")
-	_, _ = w.Write([]byte(xml.Header))
-	enc := xml.NewEncoder(w)
+	var buf bytes.Buffer
+	buf.WriteString(xml.Header)
+	enc := xml.NewEncoder(&buf)
 	enc.Indent("", "  ")
-	_ = enc.Encode(feed)
-	_ = enc.Flush()
-	_, _ = w.Write([]byte("\n"))
+	if err := enc.Encode(feed); err != nil {
+		return nil, err
+	}
+	if err := enc.Flush(); err != nil {
+		return nil, err
+	}
+	buf.WriteByte('\n')
+	return buf.Bytes(), nil
 }
 
 // allowedReactions is the canonical set of reaction emoji IDs (chii.in TV smiles).
@@ -910,16 +1018,210 @@ func messageFor(s types.Status) string {
 	return ""
 }
 
+type wikiStatsConfig struct {
+	url       string
+	userAgent string
+	cookie    string
+	interval  time.Duration
+}
+
+type wikiStatsChartSet struct {
+	Data []types.WikiStatsPoint `json:"data"`
+}
+
+func bangumiUserAgent() string {
+	if ua := strings.TrimSpace(os.Getenv("BGM_USER_AGENT")); ua != "" {
+		return ua
+	}
+	return "BangumiStatus/1.0 (+https://bgm-status.ry.mk)"
+}
+
+func bangumiCookieFromEnv() string {
+	if cookie := strings.TrimSpace(os.Getenv("BGM_COOKIE")); cookie != "" {
+		return cookie
+	}
+	raw := strings.TrimSpace(os.Getenv("BGM_COOKIE_JSON"))
+	if raw == "" {
+		return ""
+	}
+	var cookies []struct {
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal([]byte(raw), &cookies); err != nil {
+		log.Printf("wiki stats scraper disabled: invalid BGM_COOKIE_JSON: %v", err)
+		return ""
+	}
+	parts := make([]string, 0, len(cookies))
+	for _, c := range cookies {
+		if c.Name == "" {
+			continue
+		}
+		parts = append(parts, c.Name+"="+c.Value)
+	}
+	return strings.Join(parts, "; ")
+}
+
+func durationFromEnv(name string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 5*time.Minute {
+		log.Printf("invalid %s=%q, using %s", name, raw, fallback)
+		return fallback
+	}
+	return d
+}
+
+func (s *server) wikiStatsLoop(ctx context.Context, cfg wikiStatsConfig) {
+	if strings.TrimSpace(cfg.cookie) == "" {
+		log.Printf("wiki stats scraper disabled: BGM_COOKIE or BGM_COOKIE_JSON is required")
+		return
+	}
+	log.Printf("wiki stats scraper enabled: %s every %s", cfg.url, cfg.interval)
+
+	s.scrapeWikiStatsOnce(ctx, cfg)
+
+	t := time.NewTicker(cfg.interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.scrapeWikiStatsOnce(ctx, cfg)
+		}
+	}
+}
+
+func (s *server) scrapeWikiStatsOnce(parent context.Context, cfg wikiStatsConfig) {
+	ctx, cancel := context.WithTimeout(parent, 45*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.url, nil)
+	if err != nil {
+		log.Printf("wiki stats scrape: %v", err)
+		return
+	}
+	req.Header.Set("User-Agent", cfg.userAgent)
+	req.Header.Set("Cookie", cfg.cookie)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("wiki stats scrape: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("wiki stats scrape: HTTP %d", resp.StatusCode)
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		log.Printf("wiki stats scrape: read: %v", err)
+		return
+	}
+	raw, sets, err := extractWikiStatsChartSets(string(body))
+	if err != nil {
+		log.Printf("wiki stats scrape: %v", err)
+		return
+	}
+	points, err := wikiStatsPointsFromSets(sets)
+	if err != nil {
+		log.Printf("wiki stats scrape: %v", err)
+		return
+	}
+	accepted, latest, err := s.store.UpsertWikiStats(ctx, points, raw)
+	if err != nil {
+		log.Printf("wiki stats scrape: store: %v", err)
+		return
+	}
+	log.Printf("wiki stats scrape: stored %d day(s), latest=%s", accepted, latest)
+}
+
+func extractWikiStatsChartSets(html string) ([]byte, map[string]wikiStatsChartSet, error) {
+	const marker = "var CHART_SETS = "
+	i := strings.Index(html, marker)
+	if i < 0 {
+		return nil, nil, errors.New("CHART_SETS not found")
+	}
+	rest := html[i+len(marker):]
+	end, err := jsonObjectEnd(rest)
+	if err != nil {
+		return nil, nil, err
+	}
+	raw := []byte(rest[:end])
+	var sets map[string]wikiStatsChartSet
+	if err := json.Unmarshal(raw, &sets); err != nil {
+		return nil, nil, fmt.Errorf("parse CHART_SETS: %w", err)
+	}
+	return raw, sets, nil
+}
+
+func jsonObjectEnd(s string) (int, error) {
+	start := strings.IndexByte(s, '{')
+	if start < 0 {
+		return 0, errors.New("CHART_SETS JSON object not found")
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			switch c {
+			case '\\':
+				escaped = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i + 1, nil
+			}
+		}
+	}
+	return 0, errors.New("unterminated CHART_SETS JSON object")
+}
+
+func wikiStatsPointsFromSets(sets map[string]wikiStatsChartSet) ([]types.WikiStatsPoint, error) {
+	for _, key := range []string{"register", "collection", "topics", "replies"} {
+		if set, ok := sets[key]; ok && len(set.Data) > 0 {
+			return set.Data, nil
+		}
+	}
+	return nil, errors.New("CHART_SETS contains no daily data")
+}
+
 func (s *server) retentionLoop(ctx context.Context) {
 	t := time.NewTicker(6 * time.Hour)
 	defer t.Stop()
 	for {
+		if err := s.store.EnsureChecksPartitions(ctx, 2); err != nil {
+			log.Printf("retention: ensure partitions: %v", err)
+		}
 		cutoff := time.Now().AddDate(0, 0, -35) // keep a little extra
 		n, err := s.store.PurgeOlderThan(ctx, cutoff)
 		if err != nil {
 			log.Printf("retention: %v", err)
 		} else if n > 0 {
-			log.Printf("retention: purged %d rows", n)
+			log.Printf("retention: dropped %d partitions", n)
 		}
 		select {
 		case <-ctx.Done():
@@ -1110,12 +1412,18 @@ func contentTypeFor(p string) string {
 		return "application/json"
 	case strings.HasSuffix(p, ".ico"):
 		return "image/x-icon"
+	case strings.HasSuffix(p, ".xml"):
+		return "application/xml; charset=utf-8"
+	case strings.HasSuffix(p, ".txt"):
+		return "text/plain; charset=utf-8"
 	}
 	return "application/octet-stream"
 }
 
 // parseTokenPrefixes parses a third-party token allowlist of the form
-//   token1:prefix1;token2:prefix2
+//
+//	token1:prefix1;token2:prefix2
+//
 // Each token is bound to a required probe-id prefix. The operator can
 // self-pick any probe-id that starts with their prefix. Semicolons separate
 // operators. Empty input yields a nil map.

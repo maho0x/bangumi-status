@@ -71,6 +71,33 @@ type OnlinePoint struct {
 	Count int   `json:"count"`
 }
 
+// WikiStatsPoint is one daily row scraped from chii.in/wiki/stats.
+type WikiStatsPoint struct {
+	Title           string `json:"title"`
+	Date            string `json:"date"`
+	Timestamp       int64  `json:"timestamp"`
+	RegisterTotal   int    `json:"register_total"`
+	CollectionTotal int    `json:"collection_total"`
+	TopicTotal      int    `json:"topic_total"`
+	ReplyTotal      int    `json:"reply_total"`
+	Collection1     int    `json:"collection_1"`
+	Collection2     int    `json:"collection_2"`
+	Collection3     int    `json:"collection_3"`
+	Collection4     int    `json:"collection_4"`
+	Collection5     int    `json:"collection_5"`
+	Topic1          int    `json:"topic_1"`
+	Topic2          int    `json:"topic_2"`
+	Topic7          int    `json:"topic_7"`
+	Reply1          int    `json:"reply_1"`
+	Reply2          int    `json:"reply_2"`
+	Reply3          int    `json:"reply_3"`
+	Reply4          int    `json:"reply_4"`
+	Reply5          int    `json:"reply_5"`
+	Reply6          int    `json:"reply_6"`
+	Reply7          int    `json:"reply_7"`
+	Reply8          int    `json:"reply_8"`
+}
+
 // Component is a (domain, kind) pair shown as one row in the UI.
 type Component struct {
 	Domain string `json:"domain"`
@@ -124,22 +151,22 @@ type ComponentStatus struct {
 	Domain     string      `json:"domain"`
 	Kind       Kind        `json:"kind"`
 	Label      string      `json:"label"`
-	Status     Status      `json:"status"`     // current rolled-up status
-	Uptime     float64     `json:"uptime"`     // 0-100
-	Days       []DayBucket `json:"days"`       // 30 entries, oldest first
-	LastCheck  int64       `json:"last_check"`  // unix seconds
-	ProbeViews []ProbeView `json:"probe_views"` // per-probe latest status
+	Status     Status      `json:"status"`              // current rolled-up status
+	Uptime     float64     `json:"uptime"`              // 0-100
+	Days       []DayBucket `json:"days"`                // 30 entries, oldest first
+	LastCheck  int64       `json:"last_check"`          // unix seconds
+	ProbeViews []ProbeView `json:"probe_views"`         // per-probe latest status
 	Incidents  []Incident  `json:"incidents,omitempty"` // recent incident windows (≤14d)
 }
 
 // Incident is a contiguous window where the rolled-up status was not ok.
 type Incident struct {
-	StartTS    int64  `json:"start_ts"`
-	EndTS      int64  `json:"end_ts"`
-	Status     Status `json:"status"` // worst status during the window
-	DurationS  int    `json:"duration_s"`
-	PeakDown   int    `json:"peak_down"`   // max probes reporting down
-	PeakTotal  int    `json:"peak_total"`  // active probes at peak
+	StartTS   int64  `json:"start_ts"`
+	EndTS     int64  `json:"end_ts"`
+	Status    Status `json:"status"` // worst status during the window
+	DurationS int    `json:"duration_s"`
+	PeakDown  int    `json:"peak_down"`  // max probes reporting down
+	PeakTotal int    `json:"peak_total"` // active probes at peak
 }
 
 type ProbeView struct {

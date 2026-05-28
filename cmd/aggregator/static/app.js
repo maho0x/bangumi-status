@@ -5,9 +5,11 @@
   const I18N = {
     en: {
       status_ok: "Operational", status_degraded: "Degraded", status_down: "Outage",
+      status_regional: "China regional outage",
       incident_down: "Service disruption", incident_degraded: "Degraded performance",
       banner_ok: "All systems operational", banner_degraded: "Partial degradation",
-      banner_down: "Service disruption",
+      banner_down: "Service disruption", banner_regional: "China regional outage",
+      banner_sub_regional: "Most mainland China probes can't connect; other regions are operational.",
       kind_guest: "Guest access", kind_auth: "Logged-in access",
       kind_api_guest: "Public endpoint", kind_api_auth: "Authenticated",
       never: "never", just_now: "just now",
@@ -72,12 +74,19 @@
       sub_live_title: "Live page",
       sub_live_desc: "This page auto-refreshes every 30 seconds — bookmark it for a quick at-a-glance check.",
       modal_foot: "No personal data is collected. This monitor is community-run and open source.",
+      nav_status: "Status", nav_wiki_stats: "Stats",
+      wiki_recent_scrape: "Scraped", wiki_data_day: "Data day",
+      wiki_empty: "No wiki stats yet.", wiki_chart_error: "Unable to load the official chart component.",
+      wiki_metric_register: "Registered users", wiki_metric_collection: "Collections",
+      wiki_metric_topics: "Topics", wiki_metric_replies: "Replies",
     },
     zh: {
       status_ok: "正常", status_degraded: "降级", status_down: "中断",
+      status_regional: "中国大陆区域中断",
       incident_down: "服务中断", incident_degraded: "性能降级",
       banner_ok: "完全正常", banner_degraded: "部分服务降级",
-      banner_down: "服务中断",
+      banner_down: "服务中断", banner_regional: "中国大陆区域中断",
+      banner_sub_regional: "大部分中国大陆探针连接中断，其它区域正常。",
       kind_guest: "公共端点", kind_auth: "认证端点",
       kind_api_guest: "公共端点", kind_api_auth: "认证端点",
       never: "从未", just_now: "刚刚",
@@ -142,6 +151,11 @@
       sub_live_title: "实时页面",
       sub_live_desc: "本页面每30秒自动刷新，收藏以便快速查看。",
       modal_foot: "本监测由社区运营并开源。",
+      nav_status: "状态", nav_wiki_stats: "透视",
+      wiki_recent_scrape: "最近抓取", wiki_data_day: "数据日期",
+      wiki_empty: "暂无维基透视数据。", wiki_chart_error: "无法加载官方图表组件。",
+      wiki_metric_register: "注册用户", wiki_metric_collection: "收藏数",
+      wiki_metric_topics: "主题数", wiki_metric_replies: "回复数",
     },
   };
 
@@ -188,10 +202,14 @@
   const escapeHTML = (s) => String(s).replace(/[&<>"']/g, c =>
     ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
 
+  const pageRoute = window.location.pathname.replace(/\/+$/, "") === "/stats" ? "wiki" : "status";
+  document.body.dataset.page = pageRoute;
+
   const ICONS = {
     ok: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 12.5 10 17.5 19 7.5"/></svg>',
     degraded: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="6" x2="12" y2="13"/><circle cx="12" cy="17.5" r="0.2" stroke-width="3.2"/></svg>',
     down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="6.5" y1="6.5" x2="17.5" y2="17.5"/><line x1="17.5" y1="6.5" x2="6.5" y2="17.5"/></svg>',
+    regional: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M4 12h16"/><path d="M12 4c2.7 2.6 4 5.5 4 8s-1.3 5.4-4 8c-2.7-2.6-4-5.5-4-8s1.3-5.4 4-8z"/></svg>',
     loading: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><circle cx="6" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="18" cy="12" r="1.2"/></svg>',
   };
 
@@ -339,6 +357,24 @@
   };
   const hideTip = () => { tip.hidden = true; };
 
+  // Mirrors store.quorumFor: ceil(2/3 * n), floor 2. A single probe can never
+  // reach quorum, so single-probe regions can't trigger a regional banner.
+  function quorumFor(n) { return Math.max(2, Math.ceil((n * 2) / 3)); }
+
+  // cnRegionalStatus returns "down" / "degraded" / null for a component, based
+  // on whether CN probes alone reach quorum on bad status. Independent of the
+  // global rollup — caller decides how to combine.
+  function cnRegionalStatus(c) {
+    const cn = (c.probe_views || []).filter(v => v.region === "cn");
+    if (cn.length < 2) return null;
+    const down = cn.filter(v => v.status === "down").length;
+    const bad = cn.filter(v => v.status === "down" || v.status === "degraded").length;
+    const q = quorumFor(cn.length);
+    if (down >= q) return "down";
+    if (bad >= q) return "degraded";
+    return null;
+  }
+
   // --- Banner --------------------------------------------------------------
   function renderBanner(overall) {
     const banner = document.getElementById("banner");
@@ -353,14 +389,22 @@
       if ((rank[c.status] || 0) > (rank[status] || 0)) status = c.status;
     }
 
+    // If the global rollup is ok but CN-only quorum trips on any component,
+    // promote the banner to "regional" (same yellow as degraded, distinct copy).
+    const cnRegionalAffected = nonGuest.filter(c => cnRegionalStatus(c));
+    if (status === "ok" && cnRegionalAffected.length > 0) status = "regional";
+
     setClass(banner, "banner banner--" + status);
     setHTML(banner.querySelector(".banner__icon"), ICONS[status] || ICONS.loading);
     setText(banner.querySelector(".banner__title"), t("banner_" + status) || overall.message || "Status");
 
     const affected = nonGuest.filter(c => c.status !== "ok");
     const total = nonGuest.length;
-    setText(banner.querySelector(".banner__sub"),
-      affected.length === 0 ? t("banner_sub_all", total) : t("banner_sub_affected", affected.length, total));
+    let subText;
+    if (status === "regional") subText = t("banner_sub_regional");
+    else if (affected.length === 0) subText = t("banner_sub_all", total);
+    else subText = t("banner_sub_affected", affected.length, total);
+    setText(banner.querySelector(".banner__sub"), subText);
 
     const avg = nonGuest.reduce((a, c) => a + (c.uptime || 0), 0) / (nonGuest.length || 1);
     reconcile(meta, [{ key: "uptime", label: t("uptime_30d"), value: fmtUptime(avg) }],
@@ -417,7 +461,9 @@
     setHTML(card._icon, ICONS[c.status] || ICONS.degraded);
     setText(card._sev, t("incident_" + c.status) || "Incident");
     // Keep the trailing component-name text node up to date in place.
-    const trailingText = " — " + componentLabel(c);
+    // Unresolved cards already filter out guest endpoints, so the kind suffix
+    // ("· 认证端点") would be redundant — show domain only.
+    const trailingText = " — " + c.domain;
     let trailing = card._sev.nextSibling;
     if (trailing && trailing.nodeType === 3) {
       if (trailing.nodeValue !== trailingText) trailing.nodeValue = trailingText;
@@ -847,10 +893,13 @@
   }
 
   function updateComponent(row, c) {
-    setAttr(row, "data-status", c.status || "none");
-    setClass(row._dot, "status-dot status-" + (c.status || "none"));
+    // Only surface the regional state when the global rollup is otherwise ok —
+    // a real global degradation/outage takes precedence visually.
+    const displayStatus = (c.status === "ok" && cnRegionalStatus(c)) ? "regional" : (c.status || "none");
+    setAttr(row, "data-status", displayStatus);
+    setClass(row._dot, "status-dot status-" + displayStatus);
     setText(row._label, kindLabel(c));
-    setText(row._statusText, "· " + (t("status_" + c.status) || "unknown"));
+    setText(row._statusText, "· " + (t("status_" + displayStatus) || "unknown"));
     setText(row._mid, fmtUptime(c.uptime) + " " + t("uptime_label"));
     const views = c.probe_views || [];
     setText(row._toggleCount, String(views.length));
@@ -998,9 +1047,8 @@
   function createGroup(g) {
     const hasGuest = g.comps.some(c => c.kind === "guest");
     const hasAuth = g.comps.some(c => c.kind === "auth");
-    const guestIssue = g.comps.some(c => c.kind === "guest" && c.status && c.status !== "ok");
     const groupEl = el("div", {
-      class: "group" + (guestIssue || !hasAuth ? " show-guest" : ""),
+      class: "group" + (!hasAuth ? " show-guest" : ""),
       "data-domain": g.domain,
     });
     const domainDot = el("span", { class: "status-dot" });
@@ -1014,11 +1062,11 @@
     groupEl._hdrRight = hdrRight;
     groupEl._hasToggle = false;
     if (hasGuest && hasAuth) {
-      const labelEl = el("span", { class: "guest-toggle__label" }, guestIssue ? t("guest_hide") : t("guest_show"));
+      const labelEl = el("span", { class: "guest-toggle__label" }, t("guest_show"));
       const btn = el("button", {
         class: "guest-toggle",
         type: "button",
-        "aria-pressed": guestIssue ? "true" : "false",
+        "aria-pressed": "false",
         onclick: (e) => {
           const shown = groupEl.classList.toggle("show-guest");
           e.currentTarget.setAttribute("aria-pressed", shown ? "true" : "false");
@@ -1089,10 +1137,11 @@
   }
 
   function groupStatus(comps) {
-    const rank = { ok: 0, degraded: 1, down: 2 };
+    const rank = { ok: 0, regional: 1, degraded: 2, down: 3 };
     let worst = "ok";
     for (const c of comps) {
-      if ((rank[c.status] || 0) > (rank[worst] || 0)) worst = c.status;
+      const effective = (c.status === "ok" && cnRegionalStatus(c)) ? "regional" : (c.status || "ok");
+      if ((rank[effective] || 0) > (rank[worst] || 0)) worst = effective;
     }
     return worst;
   }
@@ -1133,6 +1182,350 @@
     setText(card._pill, p.online ? t("probe_pill_online") : t("probe_pill_offline"));
   }
 
+  // --- Wiki stats ----------------------------------------------------------
+  const WIKI_CHART_SCRIPTS = [
+    "/vendor/amcharts5/index.js",
+    "/vendor/amcharts5/xy.js",
+    "/vendor/amcharts5/themes/Animated.js",
+    "/vendor/amcharts5/themes/Responsive.js",
+  ];
+  let wikiChartLibPromise = null;
+  let wikiChartRoots = [];
+  let lastWikiStats = null;
+
+  function applyRouteChrome() {
+    const wikiPage = document.getElementById("wiki-stats-page");
+    if (wikiPage) wikiPage.hidden = pageRoute !== "wiki";
+    document.querySelectorAll(".top-nav a[data-route-link]").forEach(a => {
+      const active = a.dataset.routeLink === pageRoute;
+      a.setAttribute("aria-current", active ? "page" : "false");
+    });
+  }
+
+  function wikiChartSets() {
+    return {
+      register: {
+        chart_root: "chartCommunityRegister",
+        series_set: { "注册用户": "register_total" },
+        chart_type: "line",
+        show_labels: false,
+      },
+      collection: {
+        chart_root: "chartCommunityCollection",
+        series_set: {
+          "想看/读/听/玩": "collection_1",
+          "看/读/听/玩过": "collection_2",
+          "在看/读/听/玩": "collection_3",
+          "搁置": "collection_4",
+          "抛弃": "collection_5",
+        },
+        chart_type: "line",
+        show_labels: false,
+      },
+      topics: {
+        chart_root: "chartCommunityTopics",
+        series_set: {
+          "小组主题": "topic_1",
+          "条目主题": "topic_2",
+          "日志发布": "topic_7",
+        },
+        chart_type: "line",
+        show_labels: false,
+      },
+      replies: {
+        chart_root: "chartCommunityReplies",
+        series_set: {
+          "小组回复": "reply_1",
+          "条目回复": "reply_2",
+          "角色吐槽": "reply_3",
+          "人物吐槽": "reply_4",
+          "目录留言": "reply_5",
+          "时间线回复": "reply_6",
+          "日志回复": "reply_7",
+          "章节讨论": "reply_8",
+        },
+        chart_type: "line",
+        show_labels: false,
+      },
+    };
+  }
+
+  function loadScriptOnce(src) {
+    const existing = document.querySelector(`script[data-wiki-chart-src="${src}"]`);
+    if (existing) {
+      return existing.dataset.loaded === "true"
+        ? Promise.resolve()
+        : new Promise((resolve, reject) => {
+            existing.addEventListener("load", resolve, { once: true });
+            existing.addEventListener("error", reject, { once: true });
+          });
+    }
+    return new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = src;
+      script.async = false;
+      script.dataset.wikiChartSrc = src;
+      script.onload = () => { script.dataset.loaded = "true"; resolve(); };
+      script.onerror = () => reject(new Error("load " + src));
+      document.head.appendChild(script);
+    });
+  }
+
+  function loadWikiChartLibs() {
+    if (window.am5 && window.am5xy && window.am5themes_Animated && window.am5themes_Responsive) {
+      return Promise.resolve();
+    }
+    if (!wikiChartLibPromise) {
+      wikiChartLibPromise = WIKI_CHART_SCRIPTS.reduce((p, src) => p.then(() => loadScriptOnce(src)), Promise.resolve());
+    }
+    return wikiChartLibPromise;
+  }
+
+  function disposeWikiCharts() {
+    for (const root of wikiChartRoots) {
+      try { root.dispose(); } catch (_) {}
+    }
+    wikiChartRoots = [];
+  }
+
+  function initWikiChart(rootElement, data, seriesSets, options = {}) {
+    const chartType = options.chart_type || "column";
+    const isLineChart = chartType === "line";
+    const showLabels = options.show_labels !== false;
+    const enableScore = !!options.enable_score;
+    const root = am5.Root.new(rootElement, { useSafeResolution: false });
+    wikiChartRoots.push(root);
+    root.interfaceColors.set("text", am5.color(0x666666));
+
+    const responsive = am5themes_Responsive.new(root);
+    responsive.addRule({
+      name: "AxisRendererY",
+      relevant: (width) => width < 1000,
+      settings: { inside: false },
+    });
+    root.setThemes([am5themes_Animated.new(root), responsive]);
+
+    const chart = root.container.children.push(am5xy.XYChart.new(root, {
+      panX: false,
+      panY: false,
+      wheelX: "panX",
+      wheelY: isLineChart ? "zoomX" : "zoomY",
+      layout: root.verticalLayout,
+      paddingLeft: 0,
+      paddingRight: 0,
+      paddingTop: enableScore ? -20 : 0,
+    }));
+
+    chart.children.unshift(am5.Label.new(root, {
+      text: "",
+      centerX: am5.percent(0),
+      centerY: am5.percent(100),
+      y: am5.percent(100),
+      dy: 5,
+      background: am5.Rectangle.new(root, { fill: am5.color(0x000000), fillOpacity: 0 }),
+    }));
+
+    const xRenderer = am5xy.AxisRendererX.new(root, { minGridDistance: isLineChart ? 60 : 0 });
+    if (isLineChart) {
+      xRenderer.labels.template.setAll({
+        rotation: -45,
+        centerY: am5.p50,
+        centerX: am5.p100,
+        paddingTop: 8,
+      });
+    }
+    const xAxis = chart.xAxes.push(am5xy.CategoryAxis.new(root, {
+      categoryField: "title",
+      renderer: xRenderer,
+    }));
+    xAxis.data.setAll(data);
+
+    const yAxis = chart.yAxes.push(am5xy.ValueAxis.new(root, {
+      calculateTotals: !isLineChart,
+      min: 0,
+      extraMax: 0.01,
+      renderer: am5xy.AxisRendererY.new(root, {}),
+    }));
+
+    chart.set("cursor", am5xy.XYCursor.new(root, { behavior: "zoomXY", xAxis }));
+    const legend = chart.children.push(am5.Legend.new(root, {
+      centerX: am5.p100,
+      x: am5.p100,
+      paddingLeft: isLineChart ? 0 : 100,
+    }));
+    legend.valueLabels.template.set("forceHidden", true);
+
+    function makeSeries(name, fieldName, showTotal) {
+      if (isLineChart) {
+        const lineSeries = chart.series.push(am5xy.LineSeries.new(root, {
+          name,
+          xAxis,
+          yAxis,
+          valueYField: fieldName,
+          categoryXField: "title",
+          legendLabelText: "[{stroke}]{name}[/]",
+        }));
+        lineSeries.strokes.template.setAll({ strokeWidth: 2 });
+        lineSeries.bullets.push(() => am5.Bullet.new(root, {
+          sprite: am5.Circle.new(root, {
+            radius: 4,
+            fill: lineSeries.get("stroke"),
+            fillOpacity: 0.9,
+            stroke: am5.color(0xffffff),
+            strokeWidth: 2,
+            tooltipText: "[#fff]{name}: [bold]{valueY.formatNumber('#,###')}[/][/]",
+          }),
+        }));
+        lineSeries.data.setAll(data);
+        lineSeries.appear();
+        legend.data.push(lineSeries);
+        return;
+      }
+
+      const series = chart.series.push(am5xy.ColumnSeries.new(root, {
+        name,
+        stacked: true,
+        maskBullets: false,
+        xAxis,
+        yAxis,
+        valueYField: fieldName,
+        categoryXField: "title",
+        legendLabelText: "[{stroke}]{name}[/] [#888]{valueY}[/]",
+      }));
+      series.columns.template.setAll({
+        width: am5.percent(80),
+        tooltipText: "[#FFF]{name}: {valueY}",
+        tooltipY: am5.percent(0),
+      });
+      if (showLabels) {
+        const text = showTotal ? "{valueYTotal}" : "{valueY}";
+        series.bullets.push(() => am5.Bullet.new(root, {
+          locationY: showTotal ? 1 : undefined,
+          sprite: am5.Label.new(root, {
+            text,
+            fill: showTotal ? am5.color(0x888888) : root.interfaceColors.get("alternativeText"),
+            centerY: showTotal ? am5.p100 : am5.p50,
+            centerX: am5.p50,
+            populateText: true,
+          }),
+        }));
+      }
+      series.data.setAll(data);
+      series.appear();
+      if (!showTotal) legend.data.push(series);
+    }
+
+    Object.entries(seriesSets).forEach(([name, fieldName]) => makeSeries(name, fieldName, false));
+    if (!isLineChart) makeSeries("", "none", true);
+    chart.appear(1000, 100);
+  }
+
+  function wikiChartData(points) {
+    return points.map(p => ({
+      ...p,
+      title: p.title || (p.date ? p.date.slice(5) : ""),
+      none: 0,
+    }));
+  }
+
+  function setWikiChartsMessage(message) {
+    for (const set of Object.values(wikiChartSets())) {
+      const node = document.getElementById(set.chart_root);
+      if (node) node.innerHTML = `<div class="wiki-chart__empty">${escapeHTML(message)}</div>`;
+    }
+  }
+
+  function drawWikiCharts(points) {
+    disposeWikiCharts();
+    const data = wikiChartData(points);
+    for (const set of Object.values(wikiChartSets())) {
+      const node = document.getElementById(set.chart_root);
+      if (!node) continue;
+      node.replaceChildren();
+      initWikiChart(set.chart_root, data, set.series_set, set);
+    }
+  }
+
+  function renderWikiSummary(points) {
+    const summary = document.getElementById("wiki-stats-summary");
+    if (!summary) return;
+    const latest = points[points.length - 1];
+    if (!latest) {
+      summary.replaceChildren();
+      return;
+    }
+    const items = [
+      { key: "register", value: latest.register_total, label: t("wiki_metric_register") },
+      { key: "collection", value: latest.collection_total, label: t("wiki_metric_collection") },
+      { key: "topics", value: latest.topic_total, label: t("wiki_metric_topics") },
+      { key: "replies", value: latest.reply_total, label: t("wiki_metric_replies") },
+    ];
+    reconcile(summary, items, item => item.key,
+      item => {
+        const value = el("span", { class: "num" }, Number(item.value || 0).toLocaleString());
+        const label = el("span", { class: "desc" }, item.label);
+        const card = el("div", { class: "wiki-summary__item" }, [value, label]);
+        card._value = value; card._label = label;
+        return card;
+      },
+      (card, item) => {
+        setText(card._value, Number(item.value || 0).toLocaleString());
+        setText(card._label, item.label);
+      }
+    );
+  }
+
+  async function renderWikiStats(payload) {
+    lastWikiStats = payload;
+    const errorEl = document.getElementById("wiki-stats-error");
+    const scrapedEl = document.getElementById("wiki-scraped-at");
+    const sourceDayEl = document.getElementById("wiki-source-day");
+    const points = (payload?.data || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    const latest = points[points.length - 1];
+
+    setText(scrapedEl, payload?.scraped_at ? fmtRelative(payload.scraped_at) : "—");
+    setText(sourceDayEl, latest?.date ? fmtDayLabel(latest.date) : "—");
+    renderWikiSummary(points);
+
+    if (points.length === 0) {
+      if (errorEl) {
+        errorEl.hidden = false;
+        setText(errorEl, t("wiki_empty"));
+      }
+      setWikiChartsMessage(t("wiki_empty"));
+      return;
+    }
+    if (errorEl) errorEl.hidden = true;
+
+    try {
+      await loadWikiChartLibs();
+      drawWikiCharts(points);
+    } catch (_) {
+      wikiChartLibPromise = null;
+      if (errorEl) {
+        errorEl.hidden = false;
+        setText(errorEl, t("wiki_chart_error"));
+      }
+      setWikiChartsMessage(t("wiki_chart_error"));
+    }
+  }
+
+  async function initWikiStatsPage() {
+    applyRouteChrome();
+    try {
+      const resp = await fetch("/api/wiki-stats", { cache: "no-store" });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      await renderWikiStats(await resp.json());
+    } catch (err) {
+      const errorEl = document.getElementById("wiki-stats-error");
+      if (errorEl) {
+        errorEl.hidden = false;
+        setText(errorEl, err.message || String(err));
+      }
+      setWikiChartsMessage(t("wiki_empty"));
+    }
+  }
+
   // --- Static i18n ---------------------------------------------------------
   function applyI18n() {
     const setT = (sel, key) => { const n = document.querySelector(sel); if (n) n.textContent = t(key); };
@@ -1150,6 +1543,11 @@
     setT(".modal__intro", "modal_intro");
     setT(".modal__foot", "modal_foot");
     setT(".ftr__link", "atom_feed");
+    setT(".top-nav a[data-route-link='status']", "nav_status");
+    setT(".top-nav a[data-route-link='wiki']", "nav_wiki_stats");
+    setT(".wiki-hero__meta div:nth-child(1) dt", "wiki_recent_scrape");
+    setT(".wiki-hero__meta div:nth-child(2) dt", "wiki_data_day");
+    setT("#wiki-stats-error", "wiki_empty");
 
     // Subscribe button label
     const subBtnLabel = document.querySelector("#subscribe-btn span");
@@ -1246,7 +1644,8 @@
       lang = lang === "zh" ? "en" : "zh";
       localStorage.setItem("lang", lang);
       applyI18n();
-      if (lastData) render(lastData);
+      if (pageRoute === "wiki" && lastWikiStats) renderWikiStats(lastWikiStats);
+      else if (lastData) render(lastData);
     });
   }
 
@@ -1506,10 +1905,11 @@
       };
     } catch (e) { /* SSE unavailable — poll only */ }
   }
-  connectReactionStream();
-
-  initReactionGrid();
-  renderReactions();
+  if (pageRoute === "status") {
+    connectReactionStream();
+    initReactionGrid();
+    renderReactions();
+  }
 
   async function refresh() {
     try {
@@ -1554,11 +1954,19 @@
     } catch (e) { /* SSE unavailable — poll only */ }
   }
 
+  applyRouteChrome();
   applyI18n();
-  refresh();
-  connectStatusStream();
-  setInterval(refresh, 30000);
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) refresh();
-  });
+  if (pageRoute === "wiki") {
+    initWikiStatsPage();
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) initWikiStatsPage();
+    });
+  } else {
+    refresh();
+    connectStatusStream();
+    setInterval(refresh, 30000);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) refresh();
+    });
+  }
 })();
