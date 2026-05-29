@@ -18,6 +18,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"sort"
@@ -186,7 +187,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           withLogging(mux),
+		Handler:           withSecurityHeaders(withLogging(mux)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -209,7 +210,7 @@ func main() {
 	go s.wikiStatsLoop(ctx, wikiStatsCfg)
 
 	go func() {
-		log.Printf("listening on %s db=%s", *addr, *dbDSN)
+		log.Printf("listening on %s db=%s", *addr, redactDSN(*dbDSN))
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("serve: %v", err)
 		}
@@ -441,13 +442,13 @@ type atomText struct {
 
 func (s *server) handleFeed(w http.ResponseWriter, r *http.Request) {
 	scheme := "https"
-	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto == "http" || proto == "https" {
 		scheme = proto
 	} else if r.TLS == nil {
 		scheme = "http"
 	}
 	host := r.Host
-	if fh := r.Header.Get("X-Forwarded-Host"); fh != "" {
+	if fh := r.Header.Get("X-Forwarded-Host"); fh != "" && isValidHost(fh) {
 		host = fh
 	}
 	base := scheme + "://" + host
@@ -1342,6 +1343,16 @@ func (s *server) dailyReportLoop(ctx context.Context) {
 	}
 }
 
+func withSecurityHeaders(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		h.ServeHTTP(w, r)
+	})
+}
+
 func withLogging(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -1477,4 +1488,32 @@ func dirname(p string) string {
 		return p[:i]
 	}
 	return "."
+}
+
+// isValidHost rejects header values that contain characters illegal in a
+// hostname (prevents host header injection via X-Forwarded-Host).
+func isValidHost(h string) bool {
+	if h == "" || len(h) > 253 {
+		return false
+	}
+	for _, c := range h {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+			c == '.' || c == '-' || c == ':') {
+			return false
+		}
+	}
+	return true
+}
+
+// redactDSN masks the password in a database connection string so it can be
+// logged safely.
+func redactDSN(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "***"
+	}
+	if _, hasPwd := u.User.Password(); hasPwd {
+		u.User = url.UserPassword(u.User.Username(), "***")
+	}
+	return u.String()
 }
