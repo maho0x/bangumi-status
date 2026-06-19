@@ -5,11 +5,9 @@
   const I18N = {
     en: {
       status_ok: "Operational", status_degraded: "Degraded", status_down: "Outage",
-      status_regional: "China regional outage",
       incident_down: "Service disruption", incident_degraded: "Degraded performance",
       banner_ok: "All systems operational", banner_degraded: "Partial degradation",
-      banner_down: "Service disruption", banner_regional: "China regional outage",
-      banner_sub_regional: "Most mainland China probes can't connect; other regions are operational.",
+      banner_down: "Service disruption",
       kind_guest: "Guest access", kind_auth: "Logged-in access",
       kind_api_guest: "Public endpoint", kind_api_auth: "Authenticated",
       never: "never", just_now: "just now",
@@ -62,6 +60,7 @@
       online_no_data: "No online samples yet.",
       online_current: (n) => `${n} online now`,
       online_peak: (n) => `peak ${n}`,
+      online_avg: (n) => `avg ${n}`,
       now_label: "now",
       ago_label: (rel) => rel,
       footer_desc: "Independent, community-run availability monitor. Not affiliated with Bangumi.",
@@ -82,11 +81,9 @@
     },
     zh: {
       status_ok: "正常", status_degraded: "降级", status_down: "中断",
-      status_regional: "中国大陆区域中断",
       incident_down: "服务中断", incident_degraded: "性能降级",
       banner_ok: "完全正常", banner_degraded: "部分服务降级",
-      banner_down: "服务中断", banner_regional: "中国大陆区域中断",
-      banner_sub_regional: "大部分中国大陆探针连接中断，其它区域正常。",
+      banner_down: "服务中断",
       kind_guest: "公共端点", kind_auth: "认证端点",
       kind_api_guest: "公共端点", kind_api_auth: "认证端点",
       never: "从未", just_now: "刚刚",
@@ -139,6 +136,7 @@
       online_no_data: "暂无在线数据。",
       online_current: (n) => `当前 ${n} 人在线`,
       online_peak: (n) => `峰值 ${n}`,
+      online_avg: (n) => `平均值 ${n}`,
       now_label: "现在",
       ago_label: (rel) => rel,
       footer_desc: "社区运营的Bangumi可用性监测。",
@@ -209,7 +207,6 @@
     ok: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 12.5 10 17.5 19 7.5"/></svg>',
     degraded: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="6" x2="12" y2="13"/><circle cx="12" cy="17.5" r="0.2" stroke-width="3.2"/></svg>',
     down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="6.5" y1="6.5" x2="17.5" y2="17.5"/><line x1="17.5" y1="6.5" x2="6.5" y2="17.5"/></svg>',
-    regional: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M4 12h16"/><path d="M12 4c2.7 2.6 4 5.5 4 8s-1.3 5.4-4 8c-2.7-2.6-4-5.5-4-8s1.3-5.4 4-8z"/></svg>',
     loading: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><circle cx="6" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="18" cy="12" r="1.2"/></svg>',
   };
 
@@ -357,24 +354,6 @@
   };
   const hideTip = () => { tip.hidden = true; };
 
-  // Mirrors store.quorumFor: ceil(2/3 * n), floor 2. A single probe can never
-  // reach quorum, so single-probe regions can't trigger a regional banner.
-  function quorumFor(n) { return Math.max(2, Math.ceil((n * 2) / 3)); }
-
-  // cnRegionalStatus returns "down" / "degraded" / null for a component, based
-  // on whether CN probes alone reach quorum on bad status. Independent of the
-  // global rollup — caller decides how to combine.
-  function cnRegionalStatus(c) {
-    const cn = (c.probe_views || []).filter(v => v.region === "cn");
-    if (cn.length < 2) return null;
-    const down = cn.filter(v => v.status === "down").length;
-    const bad = cn.filter(v => v.status === "down" || v.status === "degraded").length;
-    const q = quorumFor(cn.length);
-    if (down >= q) return "down";
-    if (bad >= q) return "degraded";
-    return null;
-  }
-
   // --- Banner --------------------------------------------------------------
   function renderBanner(overall) {
     const banner = document.getElementById("banner");
@@ -389,11 +368,6 @@
       if ((rank[c.status] || 0) > (rank[status] || 0)) status = c.status;
     }
 
-    // If the global rollup is ok but CN-only quorum trips on any component,
-    // promote the banner to "regional" (same yellow as degraded, distinct copy).
-    const cnRegionalAffected = nonGuest.filter(c => cnRegionalStatus(c));
-    if (status === "ok" && cnRegionalAffected.length > 0) status = "regional";
-
     setClass(banner, "banner banner--" + status);
     setHTML(banner.querySelector(".banner__icon"), ICONS[status] || ICONS.loading);
     setText(banner.querySelector(".banner__title"), t("banner_" + status) || overall.message || "Status");
@@ -401,8 +375,7 @@
     const affected = nonGuest.filter(c => c.status !== "ok");
     const total = nonGuest.length;
     let subText;
-    if (status === "regional") subText = t("banner_sub_regional");
-    else if (affected.length === 0) subText = t("banner_sub_all", total);
+    if (affected.length === 0) subText = t("banner_sub_all", total);
     else subText = t("banner_sub_affected", affected.length, total);
     setText(banner.querySelector(".banner__sub"), subText);
 
@@ -643,136 +616,267 @@
   let onlineRange = "24h";
   let onlineIncidents = []; // incident windows from main-site auth components
 
-  function drawOnlineChart(rawPts) {
-    const chartEl = document.getElementById("online-chart");
-    const summaryEl = document.getElementById("online-summary");
-    if (!chartEl || !summaryEl) return;
+  // uPlot-backed online chart. The library is vendored under /vendor/uplot and
+  // lazy-loaded on first draw. Live state for the draw/cursor hooks lives in
+  // onlineState so 20s refreshes can setData() the existing instance instead of
+  // tearing it down (no flicker, hover preserved). The series shape is constant
+  // ([x, avg]); band/area/incidents are drawn in hooks off onlineState.
+  let onlineUplot = null;
+  let onlineState = null;
+  let onlineResizeObs = null;
+  let uplotLibPromise = null;
 
+  function loadUplotLib() {
+    if (window.uPlot) return Promise.resolve();
+    if (!uplotLibPromise) {
+      if (!document.querySelector("link[data-uplot]")) {
+        const link = document.createElement("link");
+        link.rel = "stylesheet";
+        link.href = "/vendor/uplot/uPlot.min.css";
+        link.dataset.uplot = "1";
+        document.head.appendChild(link);
+      }
+      uplotLibPromise = loadScriptOnce("/vendor/uplot/uPlot.iife.min.js");
+    }
+    return uplotLibPromise;
+  }
+
+  function cssVar(name, fallback) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+  }
+  // Append an 8-bit alpha to a #rrggbb color (a in 0..1). Falls through unchanged
+  // if the value isn't a plain 6-digit hex.
+  function withAlpha(hex, a) {
+    hex = (hex || "").trim();
+    if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return hex;
+    return hex + Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, "0");
+  }
+
+  function fmtOnlineX(range, ts) {
+    const d = new Date(ts * 1000);
+    return range === "24h"
+      ? String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0")
+      : (d.getMonth() + 1) + "/" + d.getDate();
+  }
+
+  function destroyOnlineChart() {
+    if (onlineResizeObs) onlineResizeObs.disconnect();
+    if (onlineUplot) { onlineUplot.destroy(); onlineUplot = null; }
+    onlineState = null;
+  }
+
+  function drawOnlineChart(rawPts) {
+    const summaryEl = document.getElementById("online-summary");
     const pts = (rawPts || []).filter(p => p && p.count > 0);
     if (pts.length < 2) {
-      chartEl.innerHTML = `<div class="online-card__empty">${t("online_no_data")}</div>`;
-      summaryEl.textContent = "—";
+      destroyOnlineChart();
+      const chartEl = document.getElementById("online-chart");
+      if (chartEl) chartEl.innerHTML = `<div class="online-card__empty">${t("online_no_data")}</div>`;
+      if (summaryEl) summaryEl.textContent = "—";
+      return;
+    }
+    loadUplotLib()
+      .then(() => renderOnlineUplot(pts))
+      .catch(() => {
+        destroyOnlineChart();
+        const chartEl = document.getElementById("online-chart");
+        if (chartEl) chartEl.innerHTML = `<div class="online-card__empty">${t("online_no_data")}</div>`;
+      });
+  }
+
+  function renderOnlineUplot(pts) {
+    const chartEl = document.getElementById("online-chart");
+    const summaryEl = document.getElementById("online-summary");
+    if (!chartEl || !summaryEl || !window.uPlot) return;
+
+    // Bucketed series (7d/30d/all) carry a min/max band; raw 24h points don't.
+    const banded = pts.some(p => (p.peak || 0) > 0);
+    const xs = pts.map(p => p.ts);
+    const avg = pts.map(p => p.count);
+    const low = pts.map(p => banded ? (p.low || p.count) : p.count);
+    const high = pts.map(p => banded ? (p.peak || p.count) : p.count);
+    const peakIdx = high.reduce((bi, v, i) => (v > high[bi] ? i : bi), 0);
+    const nowTs = Math.floor(Date.now() / 1000);
+    const incidents = (onlineIncidents || []).filter(
+      inc => (inc.end_ts || nowTs) > xs[0] && inc.start_ts < xs[xs.length - 1]);
+
+    const vMax = Math.max(...high);
+    summaryEl.textContent = t("online_current", avg[avg.length - 1].toLocaleString()) +
+      " · " + t("online_peak", vMax.toLocaleString());
+
+    // The series shape is always [x, avg]; the area fill, min/max band and
+    // incident overlays are drawn in hooks off onlineState, so every range
+    // reuses one instance (setData) — no flicker, no rebuild.
+    onlineState = { xs, avg, low, high, banded, peakIdx, incidents, range: onlineRange };
+
+    if (onlineUplot) {
+      onlineUplot.setData([xs, avg]);
       return;
     }
 
-    const last = pts[pts.length - 1];
-    const values = pts.map(p => p.count);
-    const vMin = Math.min(...values);
-    const vMax = Math.max(...values);
-    const peakPt = pts.reduce((a, b) => (b.count >= a.count ? b : a), pts[0]);
-    summaryEl.textContent = t("online_current", last.count.toLocaleString()) +
-      " · " + t("online_peak", vMax.toLocaleString());
+    chartEl.innerHTML = "";
+    const host = document.createElement("div");
+    host.className = "online-uplot-host";
+    chartEl.appendChild(host);
 
-    const W = Math.max(300, chartEl.clientWidth || 800), H = 140, padL = 42, padR = 10, padT = 12, padB = 20;
-    const iw = W - padL - padR, ih = H - padT - padB;
-    const t0 = pts[0].ts, tN = pts[pts.length - 1].ts;
-    const tSpan = Math.max(60, tN - t0);
-    const pad = Math.max(1, (vMax - vMin) * 0.15);
-    const yLo = Math.max(0, vMin - pad);
-    const yHi = vMax + pad;
-    const ySpan = Math.max(1, yHi - yLo);
+    const ok = cssVar("--ok", "#7DD9B0");
+    const grid = cssVar("--border", "#272a26");
+    const axis = cssVar("--text-faint", "#9a9c94");
+    const degraded = cssVar("--degraded", "#D9C775");
+    const down = cssVar("--down", "#D97A92");
+    const accent = cssVar("--accent", "#f09199");
+    const surface = cssVar("--surface", "#ffffff");
 
-    const xFor = ts => padL + ((ts - t0) / tSpan) * iw;
-    const yFor = v => padT + (1 - (v - yLo) / ySpan) * ih;
-
-    let line = "";
-    pts.forEach((p, i) => {
-      line += (i === 0 ? "M" : "L") + xFor(p.ts).toFixed(1) + "," + yFor(p.count).toFixed(1);
-    });
-    const area = line + "L" + xFor(tN).toFixed(1) + "," + (padT + ih) + "L" + xFor(t0).toFixed(1) + "," + (padT + ih) + "Z";
-
-    const yTicks = [];
-    for (let i = 0; i <= 3; i++) {
-      const v = yLo + (ySpan * i) / 3;
-      yTicks.push({ v: Math.round(v), y: yFor(v) });
-    }
-
-    // X-axis labels: format depends on range
-    function fmtXLabel(ts) {
-      const d = new Date(ts * 1000);
-      if (onlineRange === "24h") {
-        return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+    // Incident overlays + the min/max range band, drawn behind the line. The
+    // band is hand-drawn (not uPlot bands) so the fill and y-scaling are fully
+    // under our control.
+    const drawBands = (u) => {
+      const s = onlineState;
+      if (!s) return;
+      const ctx = u.ctx, top = u.bbox.top, h = u.bbox.height;
+      const x0 = s.xs[0], xN = s.xs[s.xs.length - 1];
+      ctx.save();
+      for (const inc of s.incidents) {
+        const x1 = u.valToPos(Math.max(inc.start_ts, x0), "x", true);
+        const x2 = u.valToPos(Math.min(inc.end_ts || Math.floor(Date.now() / 1000), xN), "x", true);
+        ctx.fillStyle = inc.status === "down" ? withAlpha(down, 0.22) : withAlpha(degraded, 0.18);
+        ctx.fillRect(x1, top, Math.max(1, x2 - x1), h);
       }
-      return (d.getMonth() + 1) + "/" + d.getDate();
-    }
-    const xLabelStart = fmtXLabel(t0);
-    const xLabelEnd = onlineRange === "24h" ? t("now_label") : fmtXLabel(tN);
-
-    // Peak marker (always visible). Anchor label to opposite side from chart edge.
-    const peakX = xFor(peakPt.ts);
-    const peakY = yFor(peakPt.count);
-    const peakD = new Date(peakPt.ts * 1000);
-    const peakTimeLabel = onlineRange === "24h"
-      ? String(peakD.getHours()).padStart(2, "0") + ":" + String(peakD.getMinutes()).padStart(2, "0")
-      : `${peakD.getMonth() + 1}/${peakD.getDate()}`;
-    const peakLabel = `${t("online_peak", peakPt.count.toLocaleString())} · ${peakTimeLabel}`;
-    const peakLabelAnchor = peakX > padL + iw * 0.6 ? "end" : "start";
-    const peakLabelDx = peakLabelAnchor === "end" ? -8 : 8;
-    const peakLabelY = peakY < padT + 14 ? peakY + 14 : peakY - 6;
-
-    const nowTs = Math.floor(Date.now() / 1000);
-    const incBands = onlineIncidents
-      .filter(inc => (inc.end_ts || nowTs) > t0 && inc.start_ts < tN)
-      .sort((a, b) => (a.status === "down" ? 1 : -1) - (b.status === "down" ? 1 : -1))
-      .map(inc => {
-        const bx1 = Math.max(xFor(inc.start_ts), padL);
-        const bx2 = Math.min(xFor(inc.end_ts || nowTs), padL + iw);
-        const bw = Math.max(1, bx2 - bx1);
-        return `<rect class="inc-band--${inc.status}" x="${bx1.toFixed(1)}" y="${padT}" width="${bw.toFixed(1)}" height="${ih}"/>`;
-      }).join("");
-
-    chartEl.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="online users over time">
-      ${yTicks.map(tk => `<line class="grid" x1="${padL}" y1="${tk.y.toFixed(1)}" x2="${W - padR}" y2="${tk.y.toFixed(1)}"/>`).join("")}
-      ${yTicks.map(tk => `<text class="axis" x="${padL - 6}" y="${(tk.y + 3).toFixed(1)}" text-anchor="end">${tk.v.toLocaleString()}</text>`).join("")}
-      <text class="axis" x="${padL}" y="${H - 5}">${xLabelStart}</text>
-      <text class="axis" x="${W - padR}" y="${H - 5}" text-anchor="end">${xLabelEnd}</text>
-      ${incBands}
-      <path class="area" d="${area}"/>
-      <path class="line" d="${line}" pathLength="1"/>
-      <circle class="peak-dot" cx="${peakX.toFixed(1)}" cy="${peakY.toFixed(1)}" r="3.5"/>
-      <text class="peak-label" x="${(peakX + peakLabelDx).toFixed(1)}" y="${peakLabelY.toFixed(1)}" text-anchor="${peakLabelAnchor}">${peakLabel}</text>
-      <line class="cursor" x1="0" y1="${padT}" x2="0" y2="${padT + ih}"/>
-      <circle class="marker" r="3.5" cx="0" cy="0"/>
-      <rect class="hit" x="${padL}" y="${padT}" width="${iw}" height="${ih}"/>
-    </svg>`;
-
-    const svgEl = chartEl.querySelector("svg");
-    const cursor = svgEl.querySelector(".cursor");
-    const marker = svgEl.querySelector(".marker");
-    const hit = svgEl.querySelector(".hit");
-
-    const onMove = (e) => {
-      const rect = svgEl.getBoundingClientRect();
-      const pctX = (e.clientX - rect.left) / rect.width;
-      const xViewport = pctX * W;
-      const tTarget = t0 + ((xViewport - padL) / iw) * tSpan;
-      let best = pts[0], bestDiff = Infinity;
-      for (const p of pts) {
-        const d = Math.abs(p.ts - tTarget);
-        if (d < bestDiff) { bestDiff = d; best = p; }
+      if (s.banded) {
+        const dpr = u.ctx.canvas.width / u.width || (window.devicePixelRatio || 1);
+        // Filled area between the high and low envelopes.
+        ctx.beginPath();
+        for (let i = 0; i < s.xs.length; i++) {
+          const x = u.valToPos(s.xs[i], "x", true), y = u.valToPos(s.high[i], "y", true);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        for (let i = s.xs.length - 1; i >= 0; i--) {
+          ctx.lineTo(u.valToPos(s.xs[i], "x", true), u.valToPos(s.low[i], "y", true));
+        }
+        ctx.closePath();
+        ctx.fillStyle = withAlpha(ok, 0.13);
+        ctx.fill();
+        // Faint stroke along the peak (high) edge so the peak envelope reads
+        // clearly instead of fading into the fill.
+        ctx.beginPath();
+        for (let i = 0; i < s.xs.length; i++) {
+          const x = u.valToPos(s.xs[i], "x", true), y = u.valToPos(s.high[i], "y", true);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.lineWidth = dpr;
+        ctx.strokeStyle = withAlpha(ok, 0.5);
+        ctx.stroke();
       }
-      const x2 = xFor(best.ts), y2 = yFor(best.count);
-      cursor.setAttribute("x1", x2);
-      cursor.setAttribute("x2", x2);
-      marker.setAttribute("cx", x2);
-      marker.setAttribute("cy", y2);
+      ctx.restore();
+    };
 
-      const d = new Date(best.ts * 1000);
-      const label = onlineRange === "24h"
+    const drawPeak = (u) => {
+      const s = onlineState;
+      if (!s) return;
+      // uPlot works in device pixels inside hooks (it scales coordinates, not
+      // the context), so size everything by the pixel ratio.
+      const dpr = u.ctx.canvas.width / u.width || (window.devicePixelRatio || 1);
+      const ctx = u.ctx;
+      const cx = u.valToPos(s.xs[s.peakIdx], "x", true);
+      const cy = u.valToPos(s.high[s.peakIdx], "y", true);
+      ctx.save();
+
+      // Accent dot with a surface-colored ring so it stands out from the green
+      // line/band.
+      ctx.beginPath();
+      ctx.arc(cx, cy, 4 * dpr, 0, Math.PI * 2);
+      ctx.fillStyle = accent;
+      ctx.fill();
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.strokeStyle = surface;
+      ctx.stroke();
+
+      // Soft label (no pill) — the brighter dot already locates the peak.
+      const right = cx > u.bbox.left + u.bbox.width * 0.6;
+      ctx.fillStyle = axis;
+      ctx.font = (11 * dpr) + 'px ui-monospace, "DejaVu Sans Mono", monospace';
+      ctx.textAlign = right ? "right" : "left";
+      ctx.textBaseline = "bottom";
+      ctx.fillText(t("online_peak", s.high[s.peakIdx].toLocaleString()),
+        cx + (right ? -6 : 6) * dpr, Math.max(u.bbox.top + 12 * dpr, cy - 5 * dpr));
+      ctx.restore();
+    };
+
+    const cursorTooltip = (u) => {
+      const s = onlineState;
+      const idx = u.cursor.idx;
+      if (s == null || idx == null) { tip.hidden = true; return; }
+      const d = new Date(s.xs[idx] * 1000);
+      const label = s.range === "24h"
         ? String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0")
-        : `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")} ${String(d.getHours()).padStart(2,"0")}:00`;
-      tip.textContent = `${label} · ${best.count.toLocaleString()}`;
+        : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}` +
+          (s.range === "7d" ? " " + String(d.getHours()).padStart(2, "0") + ":00" : "");
+      const valLabel = s.banded
+        ? `${t("online_avg", s.avg[idx].toLocaleString())} · ${t("online_peak", s.high[idx].toLocaleString())}`
+        : s.avg[idx].toLocaleString();
+      tip.textContent = `${label} · ${valLabel}`;
       tip.hidden = false;
-      const absX = rect.left + (x2 / W) * rect.width;
-      const absY = rect.top + (y2 / H) * rect.height;
+      const rect = u.over.getBoundingClientRect();
       const tw = tip.offsetWidth;
-      let tx = absX - tw / 2;
+      let tx = rect.left + u.cursor.left - tw / 2;
       tx = Math.max(6, Math.min(tx, window.innerWidth - tw - 6));
       tip.style.left = tx + "px";
-      tip.style.top = (absY - tip.offsetHeight - 10) + "px";
+      tip.style.top = (rect.top + u.valToPos(s.high[idx], "y") - tip.offsetHeight - 10) + "px";
     };
-    hit.addEventListener("mousemove", onMove);
-    hit.addEventListener("mouseleave", hideTip);
+
+    const series = [
+      {},
+      { stroke: ok, width: 1.6, points: { show: false },
+        // Area fill only on the raw 24h view; bucketed views use the band instead.
+        fill: () => (onlineState && !onlineState.banded ? withAlpha(ok, 0.20) : null) },
+    ];
+
+    const opts = {
+      width: Math.max(200, host.clientWidth),
+      height: host.clientHeight || 140,
+      padding: [12, 10, 2, 6],
+      legend: { show: false },
+      cursor: { y: false, points: { show: false }, drag: { x: false, y: false } },
+      scales: {
+        x: { time: false },
+        // Cover the band (high/low) when bucketed; otherwise pad around avg.
+        y: { range: (u, dmin, dmax) => {
+          const s = onlineState;
+          const lo = s && s.banded ? Math.min(...s.low) : dmin;
+          const hi = s && s.banded ? Math.max(...s.high) : dmax;
+          const pad = Math.max(1, (hi - lo) * 0.15);
+          return [Math.max(0, lo - pad), hi + pad];
+        } },
+      },
+      axes: [
+        { stroke: axis, grid: { show: false }, ticks: { show: false }, gap: 4, size: 22,
+          font: '11px ui-monospace, monospace',
+          values: (u, splits) => splits.map(ts => fmtOnlineX(onlineState.range, ts)) },
+        { stroke: axis, ticks: { show: false }, gap: 4, size: 34,
+          font: '11px ui-monospace, monospace',
+          grid: { stroke: withAlpha(grid, 0.7), width: 1, dash: [2, 3] },
+          values: (u, splits) => splits.map(v => Math.round(v).toLocaleString()) },
+      ],
+      series,
+      hooks: {
+        drawClear: [drawBands],
+        draw: [drawPeak],
+        setCursor: [cursorTooltip],
+      },
+    };
+
+    onlineUplot = new uPlot(opts, [xs, avg], host);
+    onlineUplot.over.addEventListener("mouseleave", () => { tip.hidden = true; });
+
+    if (!onlineResizeObs) {
+      onlineResizeObs = new ResizeObserver(() => {
+        const el = document.querySelector(".online-uplot-host");
+        if (onlineUplot && el) {
+          onlineUplot.setSize({ width: Math.max(200, el.clientWidth), height: el.clientHeight || 140 });
+        }
+      });
+    }
+    onlineResizeObs.observe(host);
   }
 
   function renderOnlineChart(overall) {
@@ -802,19 +906,13 @@
           b.classList.toggle("active", b === btn);
           b.setAttribute("aria-selected", b === btn ? "true" : "false");
         });
-        const chartEl = document.getElementById("online-chart");
-        if (chartEl) chartEl.innerHTML = `<div class="online-card__empty" style="opacity:.5">${t("online_no_data")}</div>`;
+        // drawOnlineChart manages the chart DOM itself (reusing the uPlot
+        // instance across same-shape ranges), so leave the current chart in
+        // place during the fetch rather than flashing an empty state.
         try {
           const res = await fetch(`/api/online?range=${range}`);
           const pts = await res.json();
-          // Mark this redraw as user-initiated so the entry animation plays.
-          // Auto-refresh redraws every ~20s skip this and remain silent.
-          if (chartEl) chartEl.classList.add("is-switching");
           drawOnlineChart(pts);
-          if (chartEl) {
-            clearTimeout(chartEl._switchTimer);
-            chartEl._switchTimer = setTimeout(() => chartEl.classList.remove("is-switching"), 900);
-          }
         } catch (_) {}
       });
     }
@@ -893,9 +991,7 @@
   }
 
   function updateComponent(row, c) {
-    // Only surface the regional state when the global rollup is otherwise ok —
-    // a real global degradation/outage takes precedence visually.
-    const displayStatus = (c.status === "ok" && cnRegionalStatus(c)) ? "regional" : (c.status || "none");
+    const displayStatus = c.status || "none";
     setAttr(row, "data-status", displayStatus);
     setClass(row._dot, "status-dot status-" + displayStatus);
     setText(row._label, kindLabel(c));
@@ -1137,10 +1233,10 @@
   }
 
   function groupStatus(comps) {
-    const rank = { ok: 0, regional: 1, degraded: 2, down: 3 };
+    const rank = { ok: 0, degraded: 1, down: 2 };
     let worst = "ok";
     for (const c of comps) {
-      const effective = (c.status === "ok" && cnRegionalStatus(c)) ? "regional" : (c.status || "ok");
+      const effective = c.status || "ok";
       if ((rank[effective] || 0) > (rank[worst] || 0)) worst = effective;
     }
     return worst;
@@ -1183,14 +1279,14 @@
   }
 
   // --- Wiki stats ----------------------------------------------------------
-  const WIKI_CHART_SCRIPTS = [
-    "/vendor/amcharts5/index.js",
-    "/vendor/amcharts5/xy.js",
-    "/vendor/amcharts5/themes/Animated.js",
-    "/vendor/amcharts5/themes/Responsive.js",
+  // Distinct line colors for the multi-series wiki charts (longest set is the
+  // 8-series replies breakdown).
+  const WIKI_PALETTE = [
+    "#f09199", "#7DD9B0", "#6CA0DC", "#D9C775", "#C58FD9",
+    "#E0936B", "#5FC9C2", "#D97A92", "#9DC468", "#B08CC4",
   ];
-  let wikiChartLibPromise = null;
-  let wikiChartRoots = [];
+  let wikiCharts = []; // [{ u, node }]
+  let wikiResizeObs = null;
   let lastWikiStats = null;
 
   function applyRouteChrome() {
@@ -1271,153 +1367,80 @@
     });
   }
 
+  // Both pages share the vendored uPlot library.
   function loadWikiChartLibs() {
-    if (window.am5 && window.am5xy && window.am5themes_Animated && window.am5themes_Responsive) {
-      return Promise.resolve();
-    }
-    if (!wikiChartLibPromise) {
-      wikiChartLibPromise = WIKI_CHART_SCRIPTS.reduce((p, src) => p.then(() => loadScriptOnce(src)), Promise.resolve());
-    }
-    return wikiChartLibPromise;
+    return loadUplotLib();
   }
 
   function disposeWikiCharts() {
-    for (const root of wikiChartRoots) {
-      try { root.dispose(); } catch (_) {}
+    for (const { u } of wikiCharts) {
+      try { u.destroy(); } catch (_) {}
     }
-    wikiChartRoots = [];
+    wikiCharts = [];
+    if (wikiResizeObs) wikiResizeObs.disconnect();
   }
 
-  function initWikiChart(rootElement, data, seriesSets, options = {}) {
-    const chartType = options.chart_type || "column";
-    const isLineChart = chartType === "line";
-    const showLabels = options.show_labels !== false;
-    const enableScore = !!options.enable_score;
-    const root = am5.Root.new(rootElement, { useSafeResolution: false });
-    wikiChartRoots.push(root);
-    root.interfaceColors.set("text", am5.color(0x666666));
+  // Multi-series line chart (uPlot). x is a category index → date label; the
+  // built-in legend toggles series on click and shows hovered values, and the
+  // cursor supports drag-to-zoom on x (double-click resets).
+  function initWikiChart(rootElement, data, seriesSets) {
+    const node = typeof rootElement === "string" ? document.getElementById(rootElement) : rootElement;
+    if (!node || !window.uPlot) return;
 
-    const responsive = am5themes_Responsive.new(root);
-    responsive.addRule({
-      name: "AxisRendererY",
-      relevant: (width) => width < 1000,
-      settings: { inside: false },
-    });
-    root.setThemes([am5themes_Animated.new(root), responsive]);
+    const entries = Object.entries(seriesSets); // [displayName, fieldName]
+    const xs = data.map((_, i) => i);
+    const labels = data.map(p => p.title);
+    const cols = [xs, ...entries.map(([, field]) => data.map(p => Number(p[field]) || 0))];
 
-    const chart = root.container.children.push(am5xy.XYChart.new(root, {
-      panX: false,
-      panY: false,
-      wheelX: "panX",
-      wheelY: isLineChart ? "zoomX" : "zoomY",
-      layout: root.verticalLayout,
-      paddingLeft: 0,
-      paddingRight: 0,
-      paddingTop: enableScore ? -20 : 0,
-    }));
+    const axisColor = cssVar("--text-faint", "#9a9c94");
+    const gridColor = withAlpha(cssVar("--border", "#272a26"), 0.7);
+    const pointFill = cssVar("--card", "#ffffff");
 
-    chart.children.unshift(am5.Label.new(root, {
-      text: "",
-      centerX: am5.percent(0),
-      centerY: am5.percent(100),
-      y: am5.percent(100),
-      dy: 5,
-      background: am5.Rectangle.new(root, { fill: am5.color(0x000000), fillOpacity: 0 }),
-    }));
+    const series = [
+      {},
+      ...entries.map(([name], i) => {
+        const color = WIKI_PALETTE[i % WIKI_PALETTE.length];
+        return {
+          label: name,
+          stroke: color,
+          width: 2,
+          points: { show: true, size: 5, stroke: color, fill: pointFill, width: 1.5 },
+          value: (u, v) => (v == null ? "—" : v.toLocaleString()),
+        };
+      }),
+    ];
 
-    const xRenderer = am5xy.AxisRendererX.new(root, { minGridDistance: isLineChart ? 60 : 0 });
-    if (isLineChart) {
-      xRenderer.labels.template.setAll({
-        rotation: -45,
-        centerY: am5.p50,
-        centerX: am5.p100,
-        paddingTop: 8,
+    const axisOpts = (extra) => Object.assign({
+      stroke: axisColor,
+      ticks: { show: false },
+      gap: 6,
+      font: '11px ui-monospace, monospace',
+      grid: { stroke: gridColor, width: 1, dash: [2, 3] },
+    }, extra);
+
+    const opts = {
+      width: Math.max(200, node.clientWidth),
+      height: 460,
+      padding: [14, 16, 0, 6],
+      scales: { x: { time: false }, y: { range: (u, min, max) => [0, (max || 1) * 1.03] } },
+      legend: { show: true, live: true },
+      cursor: { drag: { x: true, y: false }, focus: { prox: 30 }, points: { size: 7 } },
+      axes: [
+        axisOpts({ space: 64, values: (u, splits) => splits.map(i => labels[Math.round(i)] || "") }),
+        axisOpts({ size: 54, values: (u, splits) => splits.map(v => Math.round(v).toLocaleString()) }),
+      ],
+      series,
+    };
+
+    const u = new uPlot(opts, cols, node);
+    wikiCharts.push({ u, node });
+
+    if (!wikiResizeObs) {
+      wikiResizeObs = new ResizeObserver(() => {
+        for (const c of wikiCharts) c.u.setSize({ width: Math.max(200, c.node.clientWidth), height: 460 });
       });
     }
-    const xAxis = chart.xAxes.push(am5xy.CategoryAxis.new(root, {
-      categoryField: "title",
-      renderer: xRenderer,
-    }));
-    xAxis.data.setAll(data);
-
-    const yAxis = chart.yAxes.push(am5xy.ValueAxis.new(root, {
-      calculateTotals: !isLineChart,
-      min: 0,
-      extraMax: 0.01,
-      renderer: am5xy.AxisRendererY.new(root, {}),
-    }));
-
-    chart.set("cursor", am5xy.XYCursor.new(root, { behavior: "zoomXY", xAxis }));
-    const legend = chart.children.push(am5.Legend.new(root, {
-      centerX: am5.p100,
-      x: am5.p100,
-      paddingLeft: isLineChart ? 0 : 100,
-    }));
-    legend.valueLabels.template.set("forceHidden", true);
-
-    function makeSeries(name, fieldName, showTotal) {
-      if (isLineChart) {
-        const lineSeries = chart.series.push(am5xy.LineSeries.new(root, {
-          name,
-          xAxis,
-          yAxis,
-          valueYField: fieldName,
-          categoryXField: "title",
-          legendLabelText: "[{stroke}]{name}[/]",
-        }));
-        lineSeries.strokes.template.setAll({ strokeWidth: 2 });
-        lineSeries.bullets.push(() => am5.Bullet.new(root, {
-          sprite: am5.Circle.new(root, {
-            radius: 4,
-            fill: lineSeries.get("stroke"),
-            fillOpacity: 0.9,
-            stroke: am5.color(0xffffff),
-            strokeWidth: 2,
-            tooltipText: "[#fff]{name}: [bold]{valueY.formatNumber('#,###')}[/][/]",
-          }),
-        }));
-        lineSeries.data.setAll(data);
-        lineSeries.appear();
-        legend.data.push(lineSeries);
-        return;
-      }
-
-      const series = chart.series.push(am5xy.ColumnSeries.new(root, {
-        name,
-        stacked: true,
-        maskBullets: false,
-        xAxis,
-        yAxis,
-        valueYField: fieldName,
-        categoryXField: "title",
-        legendLabelText: "[{stroke}]{name}[/] [#888]{valueY}[/]",
-      }));
-      series.columns.template.setAll({
-        width: am5.percent(80),
-        tooltipText: "[#FFF]{name}: {valueY}",
-        tooltipY: am5.percent(0),
-      });
-      if (showLabels) {
-        const text = showTotal ? "{valueYTotal}" : "{valueY}";
-        series.bullets.push(() => am5.Bullet.new(root, {
-          locationY: showTotal ? 1 : undefined,
-          sprite: am5.Label.new(root, {
-            text,
-            fill: showTotal ? am5.color(0x888888) : root.interfaceColors.get("alternativeText"),
-            centerY: showTotal ? am5.p100 : am5.p50,
-            centerX: am5.p50,
-            populateText: true,
-          }),
-        }));
-      }
-      series.data.setAll(data);
-      series.appear();
-      if (!showTotal) legend.data.push(series);
-    }
-
-    Object.entries(seriesSets).forEach(([name, fieldName]) => makeSeries(name, fieldName, false));
-    if (!isLineChart) makeSeries("", "none", true);
-    chart.appear(1000, 100);
+    wikiResizeObs.observe(node);
   }
 
   function wikiChartData(points) {
@@ -1501,7 +1524,7 @@
       await loadWikiChartLibs();
       drawWikiCharts(points);
     } catch (_) {
-      wikiChartLibPromise = null;
+      uplotLibPromise = null; // allow a later visit to retry the lib load
       if (errorEl) {
         errorEl.hidden = false;
         setText(errorEl, t("wiki_chart_error"));

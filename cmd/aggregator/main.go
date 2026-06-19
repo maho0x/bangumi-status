@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -48,6 +49,7 @@ type server struct {
 	// slightly different values; trusting one source avoids systematic bias.
 	onlineSourceProbe string
 	wikiStatsURL      string
+	statusCachePath   string
 	notifier          *notifier.Telegram
 
 	mu       sync.RWMutex
@@ -55,8 +57,27 @@ type server struct {
 	cachedAt time.Time
 	sfGroup  singleflight.Group
 
+	// refreshCh coalesces "data changed, refresh soon" pings from ingest into
+	// the cacheRefreshLoop. Buffered size 1 so a burst of ingests collapses to
+	// at most one pending refresh; the loop applies a short debounce on top.
+	refreshCh chan struct{}
+
+	// history caches the expensive, slowly-changing parts of the status payload
+	// (30-day daily buckets + 14-day incident walk). It is refreshed at most
+	// once per historyRefreshInterval so the 20s status-refresh loop only pays
+	// for the cheap live-status queries. See componentHistories.
+	histMu    sync.RWMutex
+	history   map[store.ComponentKey]componentHistory
+	historyAt time.Time
+	histSF    singleflight.Group
+
 	feedMu    sync.Mutex
 	feedCache cachedAtomFeed
+
+	reactionMu       sync.RWMutex
+	reactionCounts   []store.ReactionCount
+	reactionCountsAt time.Time
+	reactionSF       singleflight.Group
 
 	rxHub     *reactionHub
 	statusHub *reactionHub
@@ -67,6 +88,10 @@ type cachedAtomFeed struct {
 	body     []byte
 	cachedAt time.Time
 }
+
+var errStatusCacheWarming = errors.New("status cache is warming up")
+
+const statusRefreshTimeout = 3 * time.Minute
 
 // reactionHub fans out "something changed" pings to active SSE subscribers.
 // Subscribers re-query the DB on their own so each client receives counts
@@ -162,7 +187,9 @@ func main() {
 		interval:  durationFromEnv("WIKI_STATS_INTERVAL", time.Hour),
 	}
 
-	s := &server{store: st, secret: secret, tokenPrefixes: tokenPrefixes, onlineSourceProbe: onlineSourceProbe, wikiStatsURL: wikiStatsURL, notifier: tg, rxHub: newReactionHub(), statusHub: newReactionHub()}
+	statusCachePath := stringFromEnv("STATUS_CACHE_PATH", "/var/lib/bangumi-status/status-cache.json")
+	s := &server{store: st, secret: secret, tokenPrefixes: tokenPrefixes, onlineSourceProbe: onlineSourceProbe, wikiStatsURL: wikiStatsURL, statusCachePath: statusCachePath, notifier: tg, rxHub: newReactionHub(), statusHub: newReactionHub(), refreshCh: make(chan struct{}, 1)}
+	s.loadStatusCache()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/ingest", s.handleIngest)
@@ -229,6 +256,23 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := auth[len("Bearer "):]
+	legacyAuthorized := false
+	matchedPrefix := ""
+	matchedThirdParty := false
+	if s.secret != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.secret)) == 1 {
+		legacyAuthorized = true
+	}
+	for tok, prefix := range s.tokenPrefixes {
+		if subtle.ConstantTimeCompare([]byte(token), []byte(tok)) == 1 {
+			matchedPrefix = prefix
+			matchedThirdParty = true
+		}
+	}
+	if !legacyAuthorized && !matchedThirdParty {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	var p types.IngestPayload
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&p); err != nil {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
@@ -248,24 +292,9 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Auth: either the legacy admin token (any probe-id), or a third-party
-	// token whose required prefix matches the payload's probe-id. Constant-
-	// time compare on every token to avoid timing leaks.
-	authorized := false
-	if s.secret != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.secret)) == 1 {
-		authorized = true
-	} else {
-		matchedPrefix := ""
-		matched := false
-		for tok, prefix := range s.tokenPrefixes {
-			if subtle.ConstantTimeCompare([]byte(token), []byte(tok)) == 1 {
-				matchedPrefix = prefix
-				matched = true
-			}
-		}
-		if matched && strings.HasPrefix(p.Probe, matchedPrefix) && len(p.Probe) > len(matchedPrefix) {
-			authorized = true
-		}
-	}
+	// token whose required prefix matches the payload's probe-id.
+	authorized := legacyAuthorized ||
+		(matchedThirdParty && strings.HasPrefix(p.Probe, matchedPrefix) && len(p.Probe) > len(matchedPrefix))
 	if !authorized {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -302,10 +331,16 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		_ = s.store.InsertOnline(r.Context(), ts, p.OnlineCount, p.Probe == s.onlineSourceProbe)
 	}
 
-	// Note: we do NOT invalidate the cache here. The 14 probes ingest every
-	// ~4 seconds combined; nil-ing the cache forces the next /api/status
-	// caller to block on a 10+ second recomputation. cacheRefreshLoop refreshes
-	// in the background every 20s, which is fresh enough for a status page.
+	// Nudge the refresh loop so a status change reaches connected clients (via
+	// the SSE stream) within a couple seconds instead of waiting out the 20s
+	// background tick. This is cheap now that the expensive 30-day/incident
+	// aggregation lives behind its own coarse cache (componentHistories): a
+	// refresh only reruns the narrow live-status queries. The loop debounces, so
+	// the ~4s combined ingest rate can never trigger a refresh storm. We never
+	// invalidate the cache inline — callers always read the last good snapshot.
+	if len(kept) > 0 {
+		s.requestRefresh()
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "accepted": len(kept)})
@@ -314,7 +349,11 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	overall, err := s.getOverall(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		code := http.StatusInternalServerError
+		if errors.Is(err, errStatusCacheWarming) {
+			code = http.StatusServiceUnavailable
+		}
+		http.Error(w, err.Error(), code)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -323,14 +362,27 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleMini(w http.ResponseWriter, r *http.Request) {
-	overall, err := s.getOverall(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 	// Core sites: include both guest and auth endpoints.
 	var worstStatus = types.StatusOK
-	for _, c := range overall.Components {
+	updatedAt := int64(0)
+	overall, err := s.getCachedOverall()
+	var components []types.ComponentStatus
+	if err == nil {
+		components = overall.Components
+		updatedAt = overall.UpdatedAt
+	} else {
+		components, err = s.computeRollups(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, c := range components {
+			if c.LastCheck > updatedAt {
+				updatedAt = c.LastCheck
+			}
+		}
+	}
+	for _, c := range components {
 		switch c.Domain {
 		case "bgm.tv", "bangumi.tv", "chii.in":
 			if worseThan(c.Status, worstStatus) {
@@ -343,7 +395,7 @@ func (s *server) handleMini(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status":     worstStatus,
 		"message":    messageFor(worstStatus),
-		"updated_at": overall.UpdatedAt,
+		"updated_at": updatedAt,
 	})
 }
 
@@ -483,6 +535,54 @@ func (s *server) getCachedOverall() (*types.Overall, error) {
 	return cached, nil
 }
 
+func (s *server) loadStatusCache() {
+	if s.statusCachePath == "" {
+		return
+	}
+	body, err := os.ReadFile(s.statusCachePath)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			log.Printf("status cache load: %v", err)
+		}
+		return
+	}
+	var cached types.Overall
+	if err := json.Unmarshal(body, &cached); err != nil {
+		log.Printf("status cache load: %v", err)
+		return
+	}
+	s.mu.Lock()
+	s.cached = &cached
+	s.cachedAt = time.Now().Add(-31 * time.Second)
+	s.mu.Unlock()
+	s.notifier.UpdateSummary(&cached)
+	log.Printf("loaded status cache from %s", s.statusCachePath)
+}
+
+func (s *server) saveStatusCache(overall *types.Overall) {
+	if s.statusCachePath == "" || overall == nil {
+		return
+	}
+	body, err := json.Marshal(overall)
+	if err != nil {
+		log.Printf("status cache save: %v", err)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(s.statusCachePath), 0755); err != nil {
+		log.Printf("status cache save: %v", err)
+		return
+	}
+	tmp := s.statusCachePath + ".tmp"
+	if err := os.WriteFile(tmp, body, 0644); err != nil {
+		log.Printf("status cache save: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, s.statusCachePath); err != nil {
+		log.Printf("status cache save: %v", err)
+		return
+	}
+}
+
 func (s *server) cachedFeed(base string) ([]byte, bool) {
 	s.feedMu.Lock()
 	defer s.feedMu.Unlock()
@@ -580,6 +680,10 @@ var allowedReactions = map[int]bool{
 	41: true, 102: true, 49: true, 46: true, 51: true, 101: true,
 }
 
+var allowedReactionIDs = []int{15, 23, 40, 41, 44, 46, 49, 51, 65, 83, 101, 102}
+
+const reactionCacheTTL = 2 * time.Second
+
 // reactionRate throttles reaction calls per source IP (token bucket: 300/min).
 var reactionRate = newRateLimiter(300, time.Minute)
 
@@ -588,25 +692,11 @@ func (s *server) handleReactionsList(w http.ResponseWriter, r *http.Request) {
 	if len(userID) > 128 {
 		userID = ""
 	}
-	counts, err := s.store.ListReactions(r.Context(), userID)
+	out, err := s.reactionSnapshot(r.Context(), userID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Ensure every allowed emoji appears even when count is 0.
-	byID := map[int]store.ReactionCount{}
-	for _, c := range counts {
-		byID[c.EmojiID] = c
-	}
-	out := make([]store.ReactionCount, 0, len(allowedReactions))
-	for id := range allowedReactions {
-		if c, ok := byID[id]; ok {
-			out = append(out, c)
-		} else {
-			out = append(out, store.ReactionCount{EmojiID: id})
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].EmojiID < out[j].EmojiID })
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(out)
@@ -638,6 +728,7 @@ func (s *server) handleReactionsToggle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.invalidateReactionCache()
 	s.rxHub.notify()
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -669,23 +760,10 @@ func (s *server) handleReactionsStream(w http.ResponseWriter, r *http.Request) {
 	defer cleanup()
 
 	send := func() bool {
-		counts, err := s.store.ListReactions(r.Context(), userID)
+		out, err := s.reactionSnapshot(r.Context(), userID)
 		if err != nil {
 			return false
 		}
-		byID := map[int]store.ReactionCount{}
-		for _, c := range counts {
-			byID[c.EmojiID] = c
-		}
-		out := make([]store.ReactionCount, 0, len(allowedReactions))
-		for id := range allowedReactions {
-			if c, ok := byID[id]; ok {
-				out = append(out, c)
-			} else {
-				out = append(out, store.ReactionCount{EmojiID: id})
-			}
-		}
-		sort.Slice(out, func(i, j int) bool { return out[i].EmojiID < out[j].EmojiID })
 		buf, err := json.Marshal(out)
 		if err != nil {
 			return false
@@ -718,6 +796,74 @@ func (s *server) handleReactionsStream(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+func (s *server) reactionSnapshot(ctx context.Context, userID string) ([]store.ReactionCount, error) {
+	counts, err := s.cachedReactionCounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	mine, err := s.store.UserReactionEmojiIDs(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[int]store.ReactionCount, len(counts))
+	for _, c := range counts {
+		c.Mine = mine[c.EmojiID]
+		byID[c.EmojiID] = c
+	}
+	out := make([]store.ReactionCount, 0, len(allowedReactionIDs))
+	for _, id := range allowedReactionIDs {
+		if c, ok := byID[id]; ok {
+			out = append(out, c)
+		} else {
+			out = append(out, store.ReactionCount{EmojiID: id, Mine: mine[id]})
+		}
+	}
+	return out, nil
+}
+
+func (s *server) cachedReactionCounts(ctx context.Context) ([]store.ReactionCount, error) {
+	s.reactionMu.RLock()
+	if s.reactionCounts != nil && time.Since(s.reactionCountsAt) < reactionCacheTTL {
+		out := cloneReactionCounts(s.reactionCounts)
+		s.reactionMu.RUnlock()
+		return out, nil
+	}
+	s.reactionMu.RUnlock()
+
+	v, err, _ := s.reactionSF.Do("counts", func() (any, error) {
+		counts, err := s.store.ListReactionCounts(ctx)
+		if err != nil {
+			return nil, err
+		}
+		counts = cloneReactionCounts(counts)
+		s.reactionMu.Lock()
+		s.reactionCounts = counts
+		s.reactionCountsAt = time.Now()
+		s.reactionMu.Unlock()
+		return cloneReactionCounts(counts), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.([]store.ReactionCount), nil
+}
+
+func (s *server) invalidateReactionCache() {
+	s.reactionMu.Lock()
+	s.reactionCounts = nil
+	s.reactionCountsAt = time.Time{}
+	s.reactionMu.Unlock()
+}
+
+func cloneReactionCounts(in []store.ReactionCount) []store.ReactionCount {
+	if in == nil {
+		return nil
+	}
+	out := make([]store.ReactionCount, len(in))
+	copy(out, in)
+	return out
 }
 
 func (s *server) handleStatusStream(w http.ResponseWriter, r *http.Request) {
@@ -855,105 +1001,79 @@ func (s *server) getOverall(ctx context.Context) (*types.Overall, error) {
 
 	if cached != nil {
 		if stale {
-			// Return stale data immediately; refresh in background.
-			go s.sfGroup.Do("refresh", func() (any, error) {
-				out, err := s.computeOverall(context.Background())
-				if err == nil {
-					s.mu.Lock()
-					s.cached = out
-					s.cachedAt = time.Now()
-					s.mu.Unlock()
-					s.notifier.UpdateSummary(out)
-					s.statusHub.notify()
-				}
-				return nil, err
-			})
+			s.triggerStatusRefresh()
 		}
 		return cached, nil
 	}
 
-	// No cache yet (first run) — sfGroup.Do blocks all callers until one computation finishes.
-	v, err, _ := s.sfGroup.Do("refresh", func() (any, error) {
-		out, err := s.computeOverall(context.Background())
-		if err == nil {
-			s.mu.Lock()
-			s.cached = out
-			s.cachedAt = time.Now()
-			s.mu.Unlock()
-			s.notifier.UpdateSummary(out)
-			s.statusHub.notify()
+	s.triggerStatusRefresh()
+	return nil, errStatusCacheWarming
+}
+
+func (s *server) triggerStatusRefresh() {
+	go s.sfGroup.Do("refresh", func() (any, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), statusRefreshTimeout)
+		defer cancel()
+		out, err := s.computeOverall(ctx)
+		if err != nil {
+			log.Printf("status cache refresh: %v", err)
+			return nil, err
 		}
-		return out, err
+		s.mu.Lock()
+		s.cached = out
+		s.cachedAt = time.Now()
+		s.mu.Unlock()
+		s.saveStatusCache(out)
+		s.notifier.UpdateSummary(out)
+		s.statusHub.notify()
+		return nil, nil
 	})
+}
+
+// computeOverall assembles the full status payload. The live, fast-changing
+// parts (current rolled-up status, per-probe views, probe list, online series)
+// are recomputed on every call from cheap, narrowly-scoped queries. The
+// expensive parts (the 30-day daily buckets and the 14-day incident walk, which
+// each scan a large slice of the partitioned checks table) are served from a
+// cache refreshed at most once per historyRefreshInterval — they change far too
+// slowly to justify rescanning the table on every 20s refresh tick.
+func (s *server) computeOverall(ctx context.Context) (*types.Overall, error) {
+	allComponents := types.AllComponents()
+
+	viewsByComponent, err := s.store.LatestPerProbeBatch(ctx, allComponents)
 	if err != nil {
 		return nil, err
 	}
-	return v.(*types.Overall), nil
-}
-
-func (s *server) computeOverall(ctx context.Context) (*types.Overall, error) {
-	allComponents := types.AllComponents()
-	results := make([]types.ComponentStatus, len(allComponents))
-
-	g, gctx := errgroup.WithContext(ctx)
-	incidentSince := time.Unix(0, 0)
-
-	for i, c := range allComponents {
-		i, c := i, c
-		g.Go(func() error {
-			buckets, err := s.store.DailyBuckets(gctx, c.Domain, c.Kind, 30)
-			if err != nil {
-				return err
-			}
-			views, err := s.store.LatestPerProbe(gctx, c.Domain, c.Kind)
-			if err != nil {
-				return err
-			}
-			currentStatus, last := store.RollupStatus(views)
-			incidents, err := s.store.Incidents(gctx, c.Domain, c.Kind, incidentSince)
-			if err != nil {
-				return err
-			}
-			store.OverlayIncidentsOnBuckets(buckets, incidents)
-			var totalOK, totalAll int
-			for _, b := range buckets {
-				totalAll += b.Total
-				totalOK += b.Total - b.Down - b.Degrade
-			}
-			var up float64
-			if totalAll > 0 {
-				up = float64(totalOK) / float64(totalAll) * 100
-			}
-			results[i] = types.ComponentStatus{
-				Domain:     c.Domain,
-				Kind:       c.Kind,
-				Label:      c.Label,
-				Status:     currentStatus,
-				Uptime:     up,
-				Days:       buckets,
-				LastCheck:  last,
-				ProbeViews: views,
-				Incidents:  incidents,
-			}
-			return nil
-		})
+	histories, err := s.componentHistories(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	// Fetch probes and online series concurrently with component queries.
-	var probes []types.Probe
-	var online []types.OnlinePoint
-	g.Go(func() error {
-		var err error
-		probes, err = s.store.Probes(gctx)
-		return err
-	})
-	g.Go(func() error {
-		var err error
-		online, err = s.store.OnlineSeries(gctx, time.Now().Add(-24*time.Hour))
-		return err
-	})
+	results := make([]types.ComponentStatus, len(allComponents))
+	for i, c := range allComponents {
+		key := store.ComponentKey{Domain: c.Domain, Kind: c.Kind}
+		views := viewsByComponent[key]
+		currentStatus, last := store.RollupStatus(views)
+		h := histories[key]
+		results[i] = types.ComponentStatus{
+			Domain:     c.Domain,
+			Kind:       c.Kind,
+			Label:      c.Label,
+			Status:     currentStatus,
+			Uptime:     h.uptime,
+			Days:       h.days,
+			LastCheck:  last,
+			ProbeViews: views,
+			Incidents:  h.incidents,
+		}
+	}
 
-	if err := g.Wait(); err != nil {
+	probes, err := s.store.Probes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	online, err := s.store.OnlineSeries(ctx, time.Now().Add(-24*time.Hour))
+	if err != nil {
 		return nil, err
 	}
 
@@ -973,31 +1093,134 @@ func (s *server) computeOverall(ctx context.Context) (*types.Overall, error) {
 	return out, nil
 }
 
-// computeRollups is the cheap subset of computeOverall the notifier needs:
-// per-component rolled-up status from LatestPerProbe, no Incidents walk or
-// daily-bucket aggregation.
-func (s *server) computeRollups(ctx context.Context) ([]types.ComponentStatus, error) {
+// componentHistory holds the slowly-changing, expensive-to-compute parts of a
+// component's status: its 30-day daily buckets, recent incident windows, and
+// overall uptime. These are cached and refreshed on a coarse cadence.
+type componentHistory struct {
+	days      []types.DayBucket
+	incidents []types.Incident
+	uptime    float64
+}
+
+// historyRefreshInterval bounds how often the per-component daily-bucket +
+// incident aggregation runs. The 30-day uptime strip and 14-day incident list
+// barely move between refreshes, so a coarse cadence here is what keeps
+// database load flat regardless of how often /api/status is hit or how many SSE
+// clients are connected. Live status is unaffected — it is recomputed on every
+// call in computeOverall from the cheap LatestPerProbeBatch query, and outage
+// alerting runs on its own loop (computeRollups). This is the single most
+// important knob for database load; lower it only if the history feels stale.
+const historyRefreshInterval = 5 * time.Minute
+
+// componentHistories returns the cached per-component history, refreshing it
+// when older than historyRefreshInterval. Concurrent callers coalesce onto one
+// refresh; on refresh failure the last good snapshot is reused so a transient
+// DB hiccup never blanks the 30-day chart.
+func (s *server) componentHistories(ctx context.Context) (map[store.ComponentKey]componentHistory, error) {
+	s.histMu.RLock()
+	cached, at := s.history, s.historyAt
+	s.histMu.RUnlock()
+	if cached != nil && time.Since(at) < historyRefreshInterval {
+		return cached, nil
+	}
+
+	v, err, _ := s.histSF.Do("history", func() (any, error) {
+		// Re-check: another goroutine may have refreshed while we waited on
+		// the singleflight.
+		s.histMu.RLock()
+		cached2, at2 := s.history, s.historyAt
+		s.histMu.RUnlock()
+		if cached2 != nil && time.Since(at2) < historyRefreshInterval {
+			return cached2, nil
+		}
+		fresh, err := s.computeHistories(ctx)
+		if err != nil {
+			return nil, err
+		}
+		s.histMu.Lock()
+		s.history = fresh
+		s.historyAt = time.Now()
+		s.histMu.Unlock()
+		return fresh, nil
+	})
+	if err != nil {
+		if cached != nil {
+			return cached, nil // serve stale history rather than fail the whole page
+		}
+		return nil, err
+	}
+	return v.(map[store.ComponentKey]componentHistory), nil
+}
+
+// computeHistories aggregates the 30-day daily buckets and the 14-day incident
+// windows for every component. Each query is scoped to one (domain, kind) so it
+// rides the idx_checks_lookup(domain, kind, ts) index: the daily buckets are a
+// bounded index-range aggregation and the incident walk gets its rows already
+// ts-ordered, avoiding the multi-million-row external sort that a single
+// cross-component ORDER BY ts would force. Concurrency is capped (well under the
+// pool size) so a refresh never monopolizes the database.
+func (s *server) computeHistories(ctx context.Context) (map[store.ComponentKey]componentHistory, error) {
 	allComponents := types.AllComponents()
-	results := make([]types.ComponentStatus, len(allComponents))
+	since := time.Now().Add(-14 * 24 * time.Hour)
+
+	out := make(map[store.ComponentKey]componentHistory, len(allComponents))
+	var mu sync.Mutex
+
 	g, gctx := errgroup.WithContext(ctx)
-	for i, c := range allComponents {
-		i, c := i, c
+	g.SetLimit(2)
+	for _, c := range allComponents {
+		c := c
 		g.Go(func() error {
-			views, err := s.store.LatestPerProbe(gctx, c.Domain, c.Kind)
+			buckets, err := s.store.DailyBuckets(gctx, c.Domain, c.Kind, 30)
 			if err != nil {
 				return err
 			}
-			status, _ := store.RollupStatus(views)
-			results[i] = types.ComponentStatus{
-				Domain: c.Domain,
-				Kind:   c.Kind,
-				Status: status,
+			incidents, err := s.store.Incidents(gctx, c.Domain, c.Kind, since)
+			if err != nil {
+				return err
 			}
+			store.OverlayIncidentsOnBuckets(buckets, incidents)
+			var totalOK, totalAll int
+			for _, b := range buckets {
+				totalAll += b.Total
+				totalOK += b.Total - b.Down - b.Degrade
+			}
+			var up float64
+			if totalAll > 0 {
+				up = float64(totalOK) / float64(totalAll) * 100
+			}
+			key := store.ComponentKey{Domain: c.Domain, Kind: c.Kind}
+			mu.Lock()
+			out[key] = componentHistory{days: buckets, incidents: incidents, uptime: up}
+			mu.Unlock()
 			return nil
 		})
 	}
 	if err := g.Wait(); err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// computeRollups is the cheap subset of computeOverall the notifier needs:
+// per-component rolled-up status from LatestPerProbeBatch, no Incidents walk or
+// daily-bucket aggregation.
+func (s *server) computeRollups(ctx context.Context) ([]types.ComponentStatus, error) {
+	allComponents := types.AllComponents()
+	results := make([]types.ComponentStatus, len(allComponents))
+	viewsByComponent, err := s.store.LatestPerProbeBatch(ctx, allComponents)
+	if err != nil {
+		return nil, err
+	}
+	for i, c := range allComponents {
+		key := store.ComponentKey{Domain: c.Domain, Kind: c.Kind}
+		status, last := store.RollupStatus(viewsByComponent[key])
+		results[i] = types.ComponentStatus{
+			Domain:    c.Domain,
+			Kind:      c.Kind,
+			Status:    status,
+			LastCheck: last,
+		}
 	}
 	return results, nil
 }
@@ -1074,6 +1297,13 @@ func durationFromEnv(name string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+func stringFromEnv(name, fallback string) string {
+	if raw := strings.TrimSpace(os.Getenv(name)); raw != "" {
+		return raw
+	}
+	return fallback
 }
 
 func (s *server) wikiStatsLoop(ctx context.Context, cfg wikiStatsConfig) {
@@ -1238,6 +1468,8 @@ func (s *server) reactionPurgeLoop(ctx context.Context) {
 	for {
 		if err := s.store.PurgeExpiredReactions(ctx); err != nil {
 			log.Printf("reactions purge: %v", err)
+		} else {
+			s.invalidateReactionCache()
 		}
 		select {
 		case <-ctx.Done():
@@ -1247,10 +1479,27 @@ func (s *server) reactionPurgeLoop(ctx context.Context) {
 	}
 }
 
+// requestRefresh signals cacheRefreshLoop to recompute the status snapshot
+// soon. It never blocks: if a refresh is already pending, the ping is dropped
+// (the pending one will pick up this ingest's data too).
+func (s *server) requestRefresh() {
+	select {
+	case s.refreshCh <- struct{}{}:
+	default:
+	}
+}
+
+// refreshDebounce bounds how often ingest-driven refreshes run. Probes ingest
+// every ~4s combined; without this an active outage (every probe reporting at
+// once) could fire many refreshes back to back. 2s keeps the page near-live
+// while collapsing bursts onto a single recompute.
+const refreshDebounce = 2 * time.Second
+
 func (s *server) cacheRefreshLoop(ctx context.Context) {
 	// Warm the cache immediately at startup so the first /api/status request
-	// after boot doesn't block on a cold computation.
-	s.getOverall(ctx) //nolint:errcheck
+	// after boot can use either the persisted cache or a bounded background refresh.
+	s.triggerStatusRefresh()
+	lastRefresh := time.Now()
 
 	t := time.NewTicker(20 * time.Second)
 	defer t.Stop()
@@ -1259,12 +1508,20 @@ func (s *server) cacheRefreshLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			// Steady heartbeat: a safety net if no ingest arrives and so SSE
+			// clients get a periodic UpdatedAt bump.
+		case <-s.refreshCh:
+			// Ingest-driven: skip if we just refreshed for an earlier ping.
+			if time.Since(lastRefresh) < refreshDebounce {
+				continue
+			}
 		}
 		// Force a background refresh by expiring the cache.
 		s.mu.Lock()
 		s.cachedAt = time.Time{}
 		s.mu.Unlock()
-		s.getOverall(ctx) //nolint:errcheck
+		s.triggerStatusRefresh()
+		lastRefresh = time.Now()
 	}
 }
 
@@ -1481,13 +1738,6 @@ func parseTokenPrefixes(raw string) (map[string]string, error) {
 		}
 	}
 	return out, nil
-}
-
-func dirname(p string) string {
-	if i := strings.LastIndexByte(p, '/'); i >= 0 {
-		return p[:i]
-	}
-	return "."
 }
 
 // isValidHost rejects header values that contain characters illegal in a

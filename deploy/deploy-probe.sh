@@ -2,12 +2,15 @@
 # Deploy probe binary + systemd unit to a remote host.
 # Usage: deploy-probe.sh <ssh-host> <probe-id> <region> [arch]
 #   arch defaults to amd64. Use arm64 for Osaka-3.
+# Optional env: PROBE_SSH_PORT=15000 PROBE_SSH_KEY=/path/to/key
 set -euo pipefail
 
 HOST="${1:?ssh host required, e.g. Tokyo-1}"
 PID="${2:?probe id required, e.g. tokyo-1}"
-REGION="${3:?region required: jp|cn}"
+REGION="${3:?region required: ISO 3166-1 alpha-2, e.g. jp|cn|sg}"
 ARCH="${4:-amd64}"
+PROBE_SSH_PORT="${PROBE_SSH_PORT:-22}"
+PROBE_SSH_KEY="${PROBE_SSH_KEY:-}"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/dist/probe-linux-$ARCH"
@@ -21,6 +24,13 @@ ENV_FILE="$ROOT/dist/probe.env.$PID"
 AGG_URL="${AGG_URL:-https://bgm-status.ry.mk/api/ingest}"
 if [[ -z "${INGEST_SECRET:-}" ]]; then
   echo "INGEST_SECRET must be set in environment"; exit 1
+fi
+
+SSH=(ssh -p "$PROBE_SSH_PORT")
+SCP=(scp -P "$PROBE_SSH_PORT" -q)
+if [[ -n "$PROBE_SSH_KEY" ]]; then
+  SSH+=(-i "$PROBE_SSH_KEY")
+  SCP+=(-i "$PROBE_SSH_KEY")
 fi
 
 # Extract values from info (careful: cookie JSON has = signs)
@@ -41,12 +51,12 @@ printf 'PROBE_ID=%s\nREGION=%s\nAGG_URL=%s\nINGEST_SECRET=%s\nBGM_USER_AGENT=%s\
 chmod 600 "$ENV_FILE"
 
 echo ">> copying probe binary + env to $HOST"
-ssh "$HOST" 'mkdir -p /opt/bangumi-status /etc/bangumi-status'
-scp -q "$BIN" "$HOST":/opt/bangumi-status/probe.new
-scp -q "$ENV_FILE" "$HOST":/etc/bangumi-status/probe.env
-scp -q "$ROOT/deploy/probe.service" "$HOST":/etc/systemd/system/bangumi-probe.service
+"${SSH[@]}" "$HOST" 'mkdir -p /opt/bangumi-status /etc/bangumi-status'
+"${SCP[@]}" "$BIN" "$HOST":/opt/bangumi-status/probe.new
+"${SCP[@]}" "$ENV_FILE" "$HOST":/etc/bangumi-status/probe.env
+"${SCP[@]}" "$ROOT/deploy/probe.service" "$HOST":/etc/systemd/system/bangumi-probe.service
 
-ssh "$HOST" bash <<'REMOTE'
+"${SSH[@]}" "$HOST" bash <<'REMOTE'
 set -e
 chmod 755 /opt/bangumi-status/probe.new
 mv /opt/bangumi-status/probe.new /opt/bangumi-status/probe

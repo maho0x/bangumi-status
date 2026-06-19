@@ -66,9 +66,17 @@ type IngestPayload struct {
 }
 
 // OnlinePoint is one sample of the bangumi.tv "online: N" counter.
+//
+// For raw (per-minute) series Count is the sampled value and Low/Peak are
+// omitted. For bucketed series Count is the per-bucket average (the trend),
+// while Low/Peak are the bucket's min/max so the chart can draw a range band
+// around the trend line — a single spiky minute lifts Peak without distorting
+// the average.
 type OnlinePoint struct {
 	TS    int64 `json:"ts"`
 	Count int   `json:"count"`
+	Low   int   `json:"low,omitempty"`
+	Peak  int   `json:"peak,omitempty"`
 }
 
 // WikiStatsPoint is one daily row scraped from chii.in/wiki/stats.
