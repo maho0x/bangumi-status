@@ -13,6 +13,9 @@ import (
 
 var cst = time.FixedZone("CST", 8*60*60)
 
+const probeListMaxOffline = 24 * time.Hour
+const statusExcludedRegion = "cn"
+
 // quorumFor returns the minimum number of probes that must agree to escalate status.
 // Threshold is ceil(2/3 * n), with a floor of 2.
 func quorumFor(n int) int {
@@ -32,6 +35,9 @@ func Open(dsn string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(6)
+	db.SetMaxIdleConns(6)
+	db.SetConnMaxLifetime(30 * time.Minute)
 	if err := migrate(db); err != nil {
 		return nil, err
 	}
@@ -91,6 +97,7 @@ CREATE TABLE IF NOT EXISTS reactions (
   PRIMARY KEY (emoji_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS reactions_created_at_idx ON reactions (created_at);
+CREATE INDEX IF NOT EXISTS reactions_user_created_at_idx ON reactions (user_id, created_at);
 ALTER TABLE reactions ADD COLUMN IF NOT EXISTS count INTEGER NOT NULL DEFAULT 1;
 
 CREATE TABLE IF NOT EXISTS wiki_stats_daily (
@@ -141,15 +148,15 @@ type ReactionCount struct {
 	Mine    bool `json:"mine"`
 }
 
-// ListReactions returns aggregated counts for all reactions added in the last
-// 24h. If userID is non-empty, Mine is set on rows the user has reacted to.
-func (s *Store) ListReactions(ctx context.Context, userID string) ([]ReactionCount, error) {
+// ListReactionCounts returns aggregated counts for all reactions added in the
+// last 24h. The caller can cache this because it is not user-specific.
+func (s *Store) ListReactionCounts(ctx context.Context) ([]ReactionCount, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT emoji_id, SUM(count)::int, BOOL_OR(user_id = $1)
-		FROM reactions
-		WHERE created_at > NOW() - INTERVAL '24 hours'
-		GROUP BY emoji_id
-		ORDER BY emoji_id`, userID)
+			SELECT emoji_id, SUM(count)::int
+			FROM reactions
+			WHERE created_at > NOW() - INTERVAL '24 hours'
+			GROUP BY emoji_id
+			ORDER BY emoji_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -157,10 +164,34 @@ func (s *Store) ListReactions(ctx context.Context, userID string) ([]ReactionCou
 	out := []ReactionCount{}
 	for rows.Next() {
 		var r ReactionCount
-		if err := rows.Scan(&r.EmojiID, &r.Count, &r.Mine); err != nil {
+		if err := rows.Scan(&r.EmojiID, &r.Count); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// UserReactionEmojiIDs returns the active emoji IDs a user has reacted to.
+func (s *Store) UserReactionEmojiIDs(ctx context.Context, userID string) (map[int]bool, error) {
+	out := map[int]bool{}
+	if userID == "" {
+		return out, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+			SELECT emoji_id
+			FROM reactions
+			WHERE user_id = $1 AND created_at > NOW() - INTERVAL '24 hours'`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var emojiID int
+		if err := rows.Scan(&emojiID); err != nil {
+			return nil, err
+		}
+		out[emojiID] = true
 	}
 	return out, rows.Err()
 }
@@ -214,23 +245,41 @@ func (s *Store) OnlineSeries(ctx context.Context, since time.Time) ([]types.Onli
 }
 
 // OnlineSeriesBucketed returns samples since `since` grouped into buckets of
-// `bucketSecs` seconds (0 = raw minute resolution), oldest first. For bucketed
-// queries the value is the per-bucket MAX (peak), not the average — daily
-// peaks are what users want to see for trend, and averaging smooths them away.
+// `bucketSecs` seconds (0 = raw minute resolution), oldest first.
+//
+// For raw queries each point is a single minute sample. For bucketed queries
+// Count is the per-bucket average — the trend — while Low/Peak carry the
+// bucket's min/max so the chart can draw a range band. Averaging (rather than
+// the old per-bucket MAX) keeps a single spiky minute from lifting the whole
+// bucket; the band still surfaces that the spike happened.
 func (s *Store) OnlineSeriesBucketed(ctx context.Context, since time.Time, bucketSecs int64) ([]types.OnlinePoint, error) {
-	var rows *sql.Rows
-	var err error
 	if bucketSecs <= 0 {
-		rows, err = s.db.QueryContext(ctx,
+		rows, err := s.db.QueryContext(ctx,
 			`SELECT ts_min, count FROM online_counts WHERE ts_min >= $1 ORDER BY ts_min ASC`,
 			since.Unix())
-	} else {
-		rows, err = s.db.QueryContext(ctx,
-			`SELECT (ts_min / $2) * $2 AS bucket, MAX(count)
-			 FROM online_counts WHERE ts_min >= $1
-			 GROUP BY bucket ORDER BY bucket ASC`,
-			since.Unix(), bucketSecs)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var out []types.OnlinePoint
+		for rows.Next() {
+			var p types.OnlinePoint
+			if err := rows.Scan(&p.TS, &p.Count); err != nil {
+				return nil, err
+			}
+			out = append(out, p)
+		}
+		return out, rows.Err()
 	}
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT (ts_min / $2) * $2 AS bucket,
+		        CAST(ROUND(AVG(count)) AS INTEGER) AS avg_count,
+		        MIN(count) AS low,
+		        MAX(count) AS peak
+		 FROM online_counts WHERE ts_min >= $1
+		 GROUP BY bucket ORDER BY bucket ASC`,
+		since.Unix(), bucketSecs)
 	if err != nil {
 		return nil, err
 	}
@@ -238,7 +287,7 @@ func (s *Store) OnlineSeriesBucketed(ctx context.Context, since time.Time, bucke
 	var out []types.OnlinePoint
 	for rows.Next() {
 		var p types.OnlinePoint
-		if err := rows.Scan(&p.TS, &p.Count); err != nil {
+		if err := rows.Scan(&p.TS, &p.Count, &p.Low, &p.Peak); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -409,22 +458,25 @@ func (s *Store) Insert(ctx context.Context, results []types.Result) error {
 	if len(results) == 0 {
 		return nil
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	raw, err := json.Marshal(results)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
-	stmt, err := tx.PrepareContext(ctx, `INSERT INTO checks (ts, probe, region, domain, kind, status, latency_ms, http_code, err) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	for _, r := range results {
-		if _, err := stmt.ExecContext(ctx, r.TS, r.Probe, r.Region, r.Domain, string(r.Kind), string(r.Status), r.Latency, r.HTTPCode, r.Err); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
+	_, err = s.db.ExecContext(ctx, `
+INSERT INTO checks (ts, probe, region, domain, kind, status, latency_ms, http_code, err)
+SELECT ts, probe, region, domain, kind, status, latency_ms, COALESCE(http_code, 0), COALESCE(err, '')
+FROM jsonb_to_recordset($1::jsonb) AS r(
+	ts bigint,
+	probe text,
+	region text,
+	domain text,
+	kind text,
+	status text,
+	latency_ms integer,
+	http_code integer,
+	err text
+)`, string(raw))
+	return err
 }
 
 func (s *Store) UpsertProbe(ctx context.Context, name, region string, lastSeen int64) error {
@@ -434,7 +486,12 @@ func (s *Store) UpsertProbe(ctx context.Context, name, region string, lastSeen i
 }
 
 func (s *Store) Probes(ctx context.Context) ([]types.Probe, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT name, region, last_seen FROM probes ORDER BY region, name`)
+	cutoff := time.Now().Add(-probeListMaxOffline).Unix()
+	rows, err := s.db.QueryContext(ctx, `
+SELECT name, region, last_seen
+FROM probes
+WHERE last_seen >= $1
+ORDER BY region, name`, cutoff)
 	if err != nil {
 		return nil, err
 	}
@@ -450,6 +507,73 @@ func (s *Store) Probes(ctx context.Context) ([]types.Probe, error) {
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// ComponentKey identifies one monitored (domain, kind) pair in batch query maps.
+type ComponentKey struct {
+	Domain string
+	Kind   types.Kind
+}
+
+type componentRequest struct {
+	Domain string `json:"domain"`
+	Kind   string `json:"kind"`
+}
+
+func componentRequestJSON(components []types.Component) ([]byte, []ComponentKey, error) {
+	seen := make(map[ComponentKey]bool, len(components))
+	reqs := make([]componentRequest, 0, len(components))
+	keys := make([]ComponentKey, 0, len(components))
+	for _, c := range components {
+		if c.Domain == "" || c.Kind == "" {
+			continue
+		}
+		key := ComponentKey{Domain: c.Domain, Kind: c.Kind}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		reqs = append(reqs, componentRequest{Domain: c.Domain, Kind: string(c.Kind)})
+		keys = append(keys, key)
+	}
+	raw, err := json.Marshal(reqs)
+	return raw, keys, err
+}
+
+func dailyBucketWindow(days int) (time.Time, time.Time) {
+	now := time.Now().In(cst)
+	end := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, cst)
+	start := end.Add(-time.Duration(days) * 24 * time.Hour)
+	return start, end
+}
+
+type dayBucketData struct {
+	total, down, degrade, hadDown, hadBad int
+}
+
+func fillDailyBuckets(start time.Time, days int, data map[int64]dayBucketData) []types.DayBucket {
+	out := make([]types.DayBucket, days)
+	for i := 0; i < days; i++ {
+		dayStart := start.Add(time.Duration(i) * 24 * time.Hour)
+		dayIdx := (dayStart.Unix() + 28800) / 86400
+		bucket := types.DayBucket{Day: dayStart.Format("2006-01-02")}
+		if d, ok := data[dayIdx]; ok {
+			bucket.Total = d.total
+			bucket.Down = d.down
+			bucket.Degrade = d.degrade
+			if d.total > 0 {
+				bucket.Uptime = float64(d.total-d.down-d.degrade) / float64(d.total) * 100
+			}
+			bucket.Status = types.StatusOK
+			if d.hadDown > 0 {
+				bucket.Status = types.StatusDown
+			} else if d.hadBad > 0 {
+				bucket.Status = types.StatusDegraded
+			}
+		}
+		out[i] = bucket
+	}
+	return out
 }
 
 // DaySummary returns a single-day bucket for (domain, kind) over an arbitrary
@@ -478,10 +602,10 @@ FROM (
       SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END) AS down_in_min,
       SUM(CASE WHEN status IN ('down', 'degraded') THEN 1 ELSE 0 END) AS bad_in_min
     FROM checks
-    WHERE domain = $1 AND kind = $2 AND ts >= $3 AND ts < $4
+    WHERE domain = $1 AND kind = $2 AND ts >= $3 AND ts < $4 AND region <> 'cn'
     GROUP BY ((ts + 28800) / 60)
   ) m ON ((c.ts + 28800) / 60) = m.minute
-  WHERE c.domain = $5 AND c.kind = $6 AND c.ts >= $7 AND c.ts < $8
+  WHERE c.domain = $5 AND c.kind = $6 AND c.ts >= $7 AND c.ts < $8 AND c.region <> 'cn'
 ) sub`, domain, string(kind), start.Unix(), end.Unix(), domain, string(kind), start.Unix(), end.Unix())
 
 	var okCount, degradeCount, downCount, total int
@@ -499,7 +623,7 @@ FROM (
     SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END) AS down_in_min,
     SUM(CASE WHEN status IN ('down', 'degraded') THEN 1 ELSE 0 END) AS bad_in_min
   FROM checks
-  WHERE domain = $1 AND kind = $2 AND ts >= $3 AND ts < $4
+  WHERE domain = $1 AND kind = $2 AND ts >= $3 AND ts < $4 AND region <> 'cn'
   GROUP BY ((ts + 28800) / 60)
 ) sub`, domain, string(kind), start.Unix(), end.Unix())
 
@@ -525,31 +649,27 @@ FROM (
 
 // DailyBuckets returns N daily buckets (oldest first) for (domain, kind).
 func (s *Store) DailyBuckets(ctx context.Context, domain string, kind types.Kind, days int) ([]types.DayBucket, error) {
-	now := time.Now().In(cst)
-	end := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, cst)
-	start := end.Add(-time.Duration(days) * 24 * time.Hour)
-
-	// Single-pass CTE: aggregate per minute, then roll up per day.
-	// A minute counts as down/degraded only if ≥ceil(2/3 * active_probes) agree.
+	start, end := dailyBucketWindow(days)
 	rows, err := s.db.QueryContext(ctx, `
 WITH minute_stats AS (
   SELECT
     ((ts + 28800) / 86400) AS day,
     ((ts + 28800) / 60)    AS minute,
-    COUNT(*)                                                          AS checks_in_min,
+    COUNT(*)                                                            AS checks_in_min,
     SUM(CASE WHEN status = 'down'                    THEN 1 ELSE 0 END) AS down_in_min,
-    SUM(CASE WHEN status IN ('down','degraded')       THEN 1 ELSE 0 END) AS bad_in_min
+    SUM(CASE WHEN status IN ('down','degraded')       THEN 1 ELSE 0 END) AS bad_in_min,
+    GREATEST(2, CEIL(2.0/3.0 * COUNT(*)))                               AS quorum
   FROM checks
-  WHERE domain = $1 AND kind = $2 AND ts >= $3 AND ts < $4
+  WHERE domain = $1 AND kind = $2 AND ts >= $3 AND ts < $4 AND region <> 'cn'
   GROUP BY ((ts + 28800) / 86400), ((ts + 28800) / 60)
 )
 SELECT
   day,
-  SUM(checks_in_min)                                                                                                                              AS total,
-  SUM(CASE WHEN down_in_min >= GREATEST(2, CEIL(2.0/3.0 * checks_in_min)) THEN checks_in_min ELSE 0 END)                                         AS down_count,
-  SUM(CASE WHEN bad_in_min  >= GREATEST(2, CEIL(2.0/3.0 * checks_in_min)) AND down_in_min < GREATEST(2, CEIL(2.0/3.0 * checks_in_min)) THEN checks_in_min ELSE 0 END) AS degrade_count,
-  MAX(CASE WHEN down_in_min >= GREATEST(2, CEIL(2.0/3.0 * checks_in_min)) THEN 1 ELSE 0 END)                                                     AS had_down,
-  MAX(CASE WHEN bad_in_min  >= GREATEST(2, CEIL(2.0/3.0 * checks_in_min)) THEN 1 ELSE 0 END)                                                     AS had_bad
+  SUM(checks_in_min)                                                                         AS total,
+  SUM(CASE WHEN down_in_min >= quorum THEN checks_in_min ELSE 0 END)                          AS down_count,
+  SUM(CASE WHEN bad_in_min  >= quorum AND down_in_min < quorum THEN checks_in_min ELSE 0 END) AS degrade_count,
+  MAX(CASE WHEN down_in_min >= quorum THEN 1 ELSE 0 END)                                      AS had_down,
+  MAX(CASE WHEN bad_in_min  >= quorum THEN 1 ELSE 0 END)                                      AS had_bad
 FROM minute_stats
 GROUP BY day`,
 		domain, string(kind), start.Unix(), end.Unix())
@@ -558,44 +678,19 @@ GROUP BY day`,
 	}
 	defer rows.Close()
 
-	type dayData struct {
-		total, down, degrade, hadDown, hadBad int
-	}
-	m := map[int64]dayData{}
+	data := map[int64]dayBucketData{}
 	for rows.Next() {
 		var day int64
-		var d dayData
+		var d dayBucketData
 		if err := rows.Scan(&day, &d.total, &d.down, &d.degrade, &d.hadDown, &d.hadBad); err != nil {
 			return nil, err
 		}
-		m[day] = d
+		data[day] = d
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-
-	out := make([]types.DayBucket, days)
-	for i := 0; i < days; i++ {
-		dayStart := start.Add(time.Duration(i) * 24 * time.Hour)
-		dayIdx := (dayStart.Unix() + 28800) / 86400
-		bucket := types.DayBucket{Day: dayStart.Format("2006-01-02")}
-		if d, ok := m[dayIdx]; ok {
-			bucket.Total = d.total
-			bucket.Down = d.down
-			bucket.Degrade = d.degrade
-			if d.total > 0 {
-				bucket.Uptime = float64(d.total-d.down-d.degrade) / float64(d.total) * 100
-			}
-			bucket.Status = types.StatusOK
-			if d.hadDown > 0 {
-				bucket.Status = types.StatusDown
-			} else if d.hadBad > 0 {
-				bucket.Status = types.StatusDegraded
-			}
-		}
-		out[i] = bucket
-	}
-	return out, nil
+	return fillDailyBuckets(start, days, data), nil
 }
 
 // OverlayIncidentsOnBuckets marks each day touched by an incident with at least
@@ -632,39 +727,57 @@ func OverlayIncidentsOnBuckets(buckets []types.DayBucket, incidents []types.Inci
 	}
 }
 
-// LatestPerProbe returns the most recent result per probe for (domain, kind).
-func (s *Store) LatestPerProbe(ctx context.Context, domain string, kind types.Kind) ([]types.ProbeView, error) {
+// LatestPerProbeBatch returns the most recent result per probe for every
+// requested component using one grouped lookup over the recent checks window.
+func (s *Store) LatestPerProbeBatch(ctx context.Context, components []types.Component) (map[ComponentKey][]types.ProbeView, error) {
+	raw, keys, err := componentRequestJSON(components)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[ComponentKey][]types.ProbeView, len(keys))
+	for _, key := range keys {
+		out[key] = nil
+	}
+	if len(keys) == 0 {
+		return out, nil
+	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT c.probe, c.region, c.status, c.latency_ms, COALESCE(c.http_code,0), c.ts, COALESCE(c.err,'')
+WITH requested AS (
+  SELECT domain, kind
+  FROM jsonb_to_recordset($1::jsonb) AS r(domain text, kind text)
+), latest AS (
+  SELECT c.domain, c.kind, c.probe, MAX(c.ts) AS maxts
+  FROM checks c
+  INNER JOIN requested r ON r.domain = c.domain AND r.kind = c.kind
+  WHERE c.ts >= $2
+  GROUP BY c.domain, c.kind, c.probe
+)
+SELECT c.domain, c.kind, c.probe, c.region, c.status, c.latency_ms, COALESCE(c.http_code,0), c.ts, COALESCE(c.err,'')
 FROM checks c
-INNER JOIN (
-  SELECT probe, MAX(ts) AS maxts FROM checks
-  WHERE domain=$1 AND kind=$2 AND ts >= $3
-  GROUP BY probe
-) m ON c.probe = m.probe AND c.ts = m.maxts
+INNER JOIN latest m ON c.domain = m.domain AND c.kind = m.kind AND c.probe = m.probe AND c.ts = m.maxts
 INNER JOIN probes p ON p.name = c.probe
-WHERE c.domain=$4 AND c.kind=$5
-ORDER BY c.region, c.probe`,
-		domain, string(kind), time.Now().Add(-30*time.Minute).Unix(), domain, string(kind))
+ORDER BY c.domain, c.kind, c.region, c.probe`,
+		string(raw), time.Now().Add(-30*time.Minute).Unix())
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []types.ProbeView
 	for rows.Next() {
+		var domain, kind string
 		var v types.ProbeView
 		var st string
-		if err := rows.Scan(&v.Probe, &v.Region, &st, &v.Latency, &v.HTTPCode, &v.TS, &v.Err); err != nil {
+		if err := rows.Scan(&domain, &kind, &v.Probe, &v.Region, &st, &v.Latency, &v.HTTPCode, &v.TS, &v.Err); err != nil {
 			return nil, err
 		}
 		v.Status = types.Status(st)
-		out = append(out, v)
+		key := ComponentKey{Domain: domain, Kind: types.Kind(kind)}
+		out[key] = append(out[key], v)
 	}
 	return out, rows.Err()
 }
 
 // RollupStatus computes the current status for (domain, kind) from already-fetched views.
-// Call LatestPerProbe first, then pass the result here to avoid a redundant DB round-trip.
+// Call LatestPerProbeBatch first, then pass the per-component views here to avoid a redundant DB round-trip.
 func RollupStatus(views []types.ProbeView) (types.Status, int64) {
 	if len(views) == 0 {
 		return types.StatusOK, 0
@@ -672,6 +785,9 @@ func RollupStatus(views []types.ProbeView) (types.Status, int64) {
 	var ok, deg, down int
 	var latest int64
 	for _, v := range views {
+		if v.Region == statusExcludedRegion {
+			continue
+		}
 		if v.TS > latest {
 			latest = v.TS
 		}
@@ -701,99 +817,123 @@ func RollupStatus(views []types.ProbeView) (types.Status, int64) {
 func (s *Store) Incidents(ctx context.Context, domain string, kind types.Kind, since time.Time) ([]types.Incident, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT ts, probe, status FROM checks
-WHERE domain=$1 AND kind=$2 AND ts>=$3
+WHERE domain=$1 AND kind=$2 AND ts>=$3 AND region <> 'cn'
 ORDER BY ts ASC`, domain, string(kind), since.Unix())
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	type pState struct {
-		status types.Status
-		ts     int64
-	}
-	probes := map[string]pState{}
-
-	const staleSec = int64(180)
-
-	statusRank := map[types.Status]int{types.StatusOK: 0, types.StatusDegraded: 1, types.StatusDown: 2}
-
-	rollup := func(now int64) (status types.Status, active, bad int) {
-		var ok, deg, down int
-		for _, p := range probes {
-			if now-p.ts > staleSec {
-				continue
-			}
-			active++
-			switch p.status {
-			case types.StatusOK:
-				ok++
-			case types.StatusDegraded:
-				deg++
-			case types.StatusDown:
-				down++
-			}
-		}
-		bad = down + deg
-		quorum := quorumFor(active)
-		if down >= quorum {
-			return types.StatusDown, active, bad
-		}
-		if down+deg >= quorum {
-			return types.StatusDegraded, active, bad
-		}
-		return types.StatusOK, active, bad
-	}
-
-	var out []types.Incident
-	var cur *types.Incident
-
-	closeWindow := func() {
-		if cur == nil {
-			return
-		}
-		cur.DurationS = int(cur.EndTS - cur.StartTS)
-		if cur.DurationS < 60 {
-			cur.DurationS = 60
-		}
-		out = append(out, *cur)
-		cur = nil
-	}
-
+	acc := newIncidentAccumulator()
 	for rows.Next() {
 		var ts int64
 		var probe, status string
 		if err := rows.Scan(&ts, &probe, &status); err != nil {
 			return nil, err
 		}
-		probes[probe] = pState{status: types.Status(status), ts: ts}
-		rolled, active, bad := rollup(ts)
+		acc.add(ts, probe, types.Status(status))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return acc.finish(), nil
+}
 
-		if rolled != types.StatusOK {
-			if cur == nil {
-				cur = &types.Incident{
-					StartTS:   ts,
-					EndTS:     ts,
-					Status:    rolled,
-					PeakDown:  bad,
-					PeakTotal: active,
-				}
-			} else {
-				cur.EndTS = ts
-				if statusRank[rolled] > statusRank[cur.Status] {
-					cur.Status = rolled
-				}
-				if bad > cur.PeakDown {
-					cur.PeakDown = bad
-					cur.PeakTotal = active
-				}
+type incidentProbeState struct {
+	status types.Status
+	ts     int64
+}
+
+type incidentAccumulator struct {
+	probes map[string]incidentProbeState
+	cur    *types.Incident
+	out    []types.Incident
+}
+
+func newIncidentAccumulator() *incidentAccumulator {
+	return &incidentAccumulator{probes: map[string]incidentProbeState{}}
+}
+
+func (a *incidentAccumulator) add(ts int64, probe string, status types.Status) {
+	a.probes[probe] = incidentProbeState{status: status, ts: ts}
+	rolled, active, bad := a.rollup(ts)
+	if rolled != types.StatusOK {
+		if a.cur == nil {
+			a.cur = &types.Incident{
+				StartTS:   ts,
+				EndTS:     ts,
+				Status:    rolled,
+				PeakDown:  bad,
+				PeakTotal: active,
 			}
-		} else {
-			closeWindow()
+			return
+		}
+		a.cur.EndTS = ts
+		if incidentStatusRank(rolled) > incidentStatusRank(a.cur.Status) {
+			a.cur.Status = rolled
+		}
+		if bad > a.cur.PeakDown {
+			a.cur.PeakDown = bad
+			a.cur.PeakTotal = active
+		}
+		return
+	}
+	a.closeWindow()
+}
+
+func (a *incidentAccumulator) finish() []types.Incident {
+	a.closeWindow()
+	return a.out
+}
+
+func (a *incidentAccumulator) closeWindow() {
+	if a.cur == nil {
+		return
+	}
+	a.cur.DurationS = int(a.cur.EndTS - a.cur.StartTS)
+	if a.cur.DurationS < 60 {
+		a.cur.DurationS = 60
+	}
+	a.out = append(a.out, *a.cur)
+	a.cur = nil
+}
+
+func (a *incidentAccumulator) rollup(now int64) (status types.Status, active, bad int) {
+	const staleSec = int64(180)
+	var deg, down int
+	for _, p := range a.probes {
+		if now-p.ts > staleSec {
+			continue
+		}
+		active++
+		switch p.status {
+		case types.StatusOK:
+		case types.StatusDegraded:
+			deg++
+		case types.StatusDown:
+			down++
 		}
 	}
-	closeWindow()
-	return out, rows.Err()
+	bad = down + deg
+	quorum := quorumFor(active)
+	if down >= quorum {
+		return types.StatusDown, active, bad
+	}
+	if down+deg >= quorum {
+		return types.StatusDegraded, active, bad
+	}
+	return types.StatusOK, active, bad
+}
+
+func incidentStatusRank(s types.Status) int {
+	switch s {
+	case types.StatusDown:
+		return 2
+	case types.StatusDegraded:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // PurgeOlderThan drops daily partitions of `checks` whose entire range is
@@ -872,14 +1012,40 @@ func (s *Store) EnsureChecksPartitions(ctx context.Context, daysAhead int) error
 func (s *Store) Stats(ctx context.Context) (map[string]any, error) {
 	out := map[string]any{}
 	var n int64
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM checks`).Scan(&n); err != nil {
+	// Health checks should not scan the full partitioned checks table. PostgreSQL
+	// reltuples is approximate, but good enough for this debugging endpoint.
+	if err := s.db.QueryRowContext(ctx, `
+WITH child_rels AS (
+	SELECT inhrelid AS oid
+	FROM pg_inherits
+	WHERE inhparent = 'checks'::regclass
+), rels AS (
+	SELECT oid FROM child_rels
+	UNION ALL
+	SELECT 'checks'::regclass
+	WHERE NOT EXISTS (SELECT 1 FROM child_rels)
+)
+SELECT COALESCE(SUM(GREATEST(c.reltuples, 0))::bigint, 0)
+FROM rels r
+JOIN pg_class c ON c.oid = r.oid`).Scan(&n); err != nil {
 		return nil, err
 	}
 	out["check_rows"] = n
-	var earliest, latest sql.NullInt64
-	_ = s.db.QueryRowContext(ctx, `SELECT MIN(ts), MAX(ts) FROM checks`).Scan(&earliest, &latest)
-	if earliest.Valid {
-		out["earliest"] = earliest.Int64
+	var firstPartition sql.NullString
+	_ = s.db.QueryRowContext(ctx, `
+SELECT MIN(c.relname)
+FROM pg_inherits i
+JOIN pg_class c ON c.oid = i.inhrelid
+WHERE i.inhparent = 'checks'::regclass
+  AND c.relname ~ '^checks_[0-9]{8}$'`).Scan(&firstPartition)
+	if firstPartition.Valid {
+		if day, err := time.Parse("checks_20060102", firstPartition.String); err == nil {
+			out["earliest"] = day.Unix()
+		}
+	}
+	var latest sql.NullInt64
+	_ = s.db.QueryRowContext(ctx, `SELECT MAX(last_seen) FROM probes`).Scan(&latest)
+	if latest.Valid {
 		out["latest"] = latest.Int64
 	}
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM wiki_stats_daily`).Scan(&n); err == nil {
