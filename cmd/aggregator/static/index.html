@@ -138,17 +138,23 @@
       <div id="components" class="components"></div>
     </section>
 
-    <section class="online-section" aria-label="用户活跃度">
+    <section class="online-section" aria-label="活动">
       <header class="section-head">
-        <h2>用户活跃度</h2>
+        <h2>活动</h2>
         <span class="section-head__hint" id="online-summary">—</span>
       </header>
       <div class="online-card">
-        <div class="online-tabs" id="online-tabs" role="tablist">
-          <button class="online-tab active" data-range="24h" role="tab" aria-selected="true">24h</button>
-          <button class="online-tab" data-range="7d" role="tab" aria-selected="false">7d</button>
-          <button class="online-tab" data-range="30d" role="tab" aria-selected="false">30d</button>
-          <button class="online-tab" data-range="all" role="tab" aria-selected="false" id="online-tab-all">全部</button>
+        <div class="online-controls">
+          <div class="online-metrics" id="online-metrics" role="tablist" aria-label="指标">
+            <button class="online-metric active" data-metric="bangumi" role="tab" aria-selected="true">班固米在线</button>
+            <button class="online-metric" data-metric="traffic" role="tab" aria-selected="false">本站访问</button>
+          </div>
+          <div class="online-tabs" id="online-tabs" role="tablist" aria-label="时间范围">
+            <button class="online-tab active" data-range="24h" role="tab" aria-selected="true">24h</button>
+            <button class="online-tab" data-range="7d" role="tab" aria-selected="false">7d</button>
+            <button class="online-tab" data-range="30d" role="tab" aria-selected="false">30d</button>
+            <button class="online-tab" data-range="all" role="tab" aria-selected="false" id="online-tab-all">全部</button>
+          </div>
         </div>
         <div class="online-card__chart" id="online-chart"></div>
         <p class="online-card__note" id="online-note">来自 bangumi.tv 登录用户端的 online 计数。</p>

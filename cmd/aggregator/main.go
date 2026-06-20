@@ -129,6 +129,14 @@ func (h *reactionHub) notify() {
 	}
 }
 
+// count returns the number of active subscribers. For statusHub this is the
+// number of status-page tabs holding a live SSE connection.
+func (h *reactionHub) count() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.subs)
+}
+
 func main() {
 	addr := flag.String("addr", ":8080", "listen address")
 	dbDSN := flag.String("db-dsn", os.Getenv("DB_DSN"), "database DSN (postgres://...)")
@@ -196,6 +204,7 @@ func main() {
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/mini", s.handleMini)
 	mux.HandleFunc("GET /api/online", s.handleOnline)
+	mux.HandleFunc("GET /api/traffic", s.handleTraffic)
 	mux.HandleFunc("GET /api/wiki-stats", s.handleWikiStats)
 	mux.HandleFunc("GET /api/probes", s.handleProbes)
 	mux.HandleFunc("GET /api/health", s.handleHealth)
@@ -231,6 +240,7 @@ func main() {
 
 	go s.retentionLoop(ctx)
 	go s.cacheRefreshLoop(ctx)
+	go s.trafficSampleLoop(ctx)
 	go s.notifierLoop(ctx)
 	go s.dailyReportLoop(ctx)
 	go s.reactionPurgeLoop(ctx)
@@ -399,23 +409,22 @@ func (s *server) handleMini(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *server) handleOnline(w http.ResponseWriter, r *http.Request) {
-	var since time.Time
-	var bucket int64
-	switch r.URL.Query().Get("range") {
+// seriesRangeParams maps the ?range= query to a (since, bucketSecs) pair shared
+// by the online and traffic time-series endpoints.
+func seriesRangeParams(rangeStr string) (since time.Time, bucketSecs int64) {
+	switch rangeStr {
 	case "7d":
-		since = time.Now().Add(-7 * 24 * time.Hour)
-		bucket = 600
+		return time.Now().Add(-7 * 24 * time.Hour), 600
 	case "30d":
-		since = time.Now().Add(-30 * 24 * time.Hour)
-		bucket = 3600
+		return time.Now().Add(-30 * 24 * time.Hour), 3600
 	case "all":
-		since = time.Unix(0, 0)
-		bucket = 21600
+		return time.Unix(0, 0), 21600
 	default:
-		since = time.Now().Add(-24 * time.Hour)
+		return time.Now().Add(-24 * time.Hour), 0
 	}
-	pts, err := s.store.OnlineSeriesBucketed(r.Context(), since, bucket)
+}
+
+func writeOnlinePoints(w http.ResponseWriter, pts []types.OnlinePoint, err error) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -425,7 +434,19 @@ func (s *server) handleOnline(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=60")
-	json.NewEncoder(w).Encode(pts)
+	_ = json.NewEncoder(w).Encode(pts)
+}
+
+func (s *server) handleOnline(w http.ResponseWriter, r *http.Request) {
+	since, bucket := seriesRangeParams(r.URL.Query().Get("range"))
+	pts, err := s.store.OnlineSeriesBucketed(r.Context(), since, bucket)
+	writeOnlinePoints(w, pts, err)
+}
+
+func (s *server) handleTraffic(w http.ResponseWriter, r *http.Request) {
+	since, bucket := seriesRangeParams(r.URL.Query().Get("range"))
+	pts, err := s.store.TrafficSeriesBucketed(r.Context(), since, bucket)
+	writeOnlinePoints(w, pts, err)
 }
 
 func (s *server) handleWikiStats(w http.ResponseWriter, r *http.Request) {
@@ -1494,6 +1515,28 @@ func (s *server) requestRefresh() {
 // once) could fire many refreshes back to back. 2s keeps the page near-live
 // while collapsing bursts onto a single recompute.
 const refreshDebounce = 2 * time.Second
+
+// trafficSampleLoop records the number of concurrent status-page viewers
+// (active SSE subscribers) once per minute, on the minute. It's a proxy for
+// "how many people are checking the status page right now".
+func (s *server) trafficSampleLoop(ctx context.Context) {
+	sample := func() {
+		if err := s.store.InsertTrafficSample(ctx, time.Now().Unix(), s.statusHub.count()); err != nil {
+			log.Printf("traffic sample: %v", err)
+		}
+	}
+	sample()
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			sample()
+		}
+	}
+}
 
 func (s *server) cacheRefreshLoop(ctx context.Context) {
 	// Warm the cache immediately at startup so the first /api/status request

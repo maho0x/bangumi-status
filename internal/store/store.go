@@ -88,6 +88,14 @@ CREATE TABLE IF NOT EXISTS online_counts (
 -- probe under the prior single-source rule, so default to TRUE.
 ALTER TABLE online_counts ADD COLUMN IF NOT EXISTS is_canonical BOOLEAN NOT NULL DEFAULT TRUE;
 
+-- traffic_samples: concurrent status-page viewers (active SSE subscribers),
+-- sampled once per minute. A proxy for "how many people are checking the
+-- status page" — which itself spikes when bangumi.tv is down.
+CREATE TABLE IF NOT EXISTS traffic_samples (
+  ts_min  BIGINT PRIMARY KEY,
+  viewers INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS reactions (
   emoji_id   SMALLINT NOT NULL,
   user_id    TEXT NOT NULL,
@@ -244,18 +252,45 @@ func (s *Store) OnlineSeries(ctx context.Context, since time.Time) ([]types.Onli
 	return s.OnlineSeriesBucketed(ctx, since, 0)
 }
 
-// OnlineSeriesBucketed returns samples since `since` grouped into buckets of
-// `bucketSecs` seconds (0 = raw minute resolution), oldest first.
-//
-// For raw queries each point is a single minute sample. For bucketed queries
-// Count is the per-bucket average — the trend — while Low/Peak carry the
-// bucket's min/max so the chart can draw a range band. Averaging (rather than
-// the old per-bucket MAX) keeps a single spiky minute from lifting the whole
-// bucket; the band still surfaces that the spike happened.
+// OnlineSeriesBucketed returns bangumi.tv online-counter samples since `since`,
+// grouped into buckets of `bucketSecs` seconds (0 = raw minute resolution).
 func (s *Store) OnlineSeriesBucketed(ctx context.Context, since time.Time, bucketSecs int64) ([]types.OnlinePoint, error) {
+	return s.bucketedSeries(ctx, "online_counts", "count", since, bucketSecs)
+}
+
+// InsertTrafficSample records the number of concurrent status-page viewers at
+// `ts`, one row per minute. Unlike the online counter, zero is a valid sample
+// (nobody watching), so it is not dropped.
+func (s *Store) InsertTrafficSample(ctx context.Context, ts int64, viewers int) error {
+	if ts <= 0 || viewers < 0 {
+		return nil
+	}
+	tsMin := ts - (ts % 60)
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO traffic_samples (ts_min, viewers) VALUES ($1, $2)
+		 ON CONFLICT (ts_min) DO UPDATE SET viewers = GREATEST(traffic_samples.viewers, EXCLUDED.viewers)`,
+		tsMin, viewers)
+	return err
+}
+
+// TrafficSeriesBucketed mirrors OnlineSeriesBucketed for the status-page viewer
+// series.
+func (s *Store) TrafficSeriesBucketed(ctx context.Context, since time.Time, bucketSecs int64) ([]types.OnlinePoint, error) {
+	return s.bucketedSeries(ctx, "traffic_samples", "viewers", since, bucketSecs)
+}
+
+// bucketedSeries returns either raw minute samples (bucketSecs<=0) or per-bucket
+// points from a (ts_min, <valueCol>) table, oldest first. For bucketed queries
+// Count is the per-bucket average (the trend) while Low/Peak carry the bucket's
+// min/max so the chart can draw a range band — averaging keeps a single spiky
+// minute from lifting the whole bucket while the band still surfaces the spike.
+//
+// table and valueCol are internal constants (never user input), so interpolating
+// them into the SQL is safe.
+func (s *Store) bucketedSeries(ctx context.Context, table, valueCol string, since time.Time, bucketSecs int64) ([]types.OnlinePoint, error) {
 	if bucketSecs <= 0 {
 		rows, err := s.db.QueryContext(ctx,
-			`SELECT ts_min, count FROM online_counts WHERE ts_min >= $1 ORDER BY ts_min ASC`,
+			`SELECT ts_min, `+valueCol+` FROM `+table+` WHERE ts_min >= $1 ORDER BY ts_min ASC`,
 			since.Unix())
 		if err != nil {
 			return nil, err
@@ -274,10 +309,10 @@ func (s *Store) OnlineSeriesBucketed(ctx context.Context, since time.Time, bucke
 
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT (ts_min / $2) * $2 AS bucket,
-		        CAST(ROUND(AVG(count)) AS INTEGER) AS avg_count,
-		        MIN(count) AS low,
-		        MAX(count) AS peak
-		 FROM online_counts WHERE ts_min >= $1
+		        CAST(ROUND(AVG(`+valueCol+`)) AS INTEGER) AS avg_v,
+		        MIN(`+valueCol+`) AS low,
+		        MAX(`+valueCol+`) AS peak
+		 FROM `+table+` WHERE ts_min >= $1
 		 GROUP BY bucket ORDER BY bucket ASC`,
 		since.Unix(), bucketSecs)
 	if err != nil {

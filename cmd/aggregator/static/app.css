@@ -1251,31 +1251,44 @@ body[data-page="wiki"] .container {
   box-shadow: var(--shadow-sm);
   overflow: hidden;
 }
-.online-tabs {
+.online-controls {
   display: flex;
-  gap: 1px;
-  padding: 10px 14px 8px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface-sunk);
 }
-.online-tab {
-  background: none;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  color: var(--text-faint);
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  font-weight: 500;
-  padding: 3px 10px;
-  cursor: pointer;
-  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
-}
-.online-tab:hover { color: var(--text); background: var(--surface); border-color: var(--border); }
-.online-tab.active {
-  color: var(--text);
+/* Pill segmented controls, matching .top-nav. */
+.online-tabs, .online-metrics {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
   background: var(--surface);
-  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
 }
+.online-tab, .online-metric {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  padding: 3px 11px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--text-faint);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.online-tab:hover, .online-metric:hover { color: var(--text); background: var(--surface-2); }
+.online-tab.active, .online-metric.active { color: var(--text); background: var(--surface-2); }
 .online-card__chart {
   position: relative; width: 100%; height: 140px;
   padding: 0 18px;

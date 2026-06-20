@@ -54,13 +54,17 @@
       section_unresolved: "Unresolved incidents",
       section_past: "Past incidents", hint_past: "Last 10 days",
       section_probes: "Probe nodes",
-      section_online: "User activity",
+      section_online: "Activity",
       online_hint_24h: "last 24 hours",
       online_note: "Live “online” counter from bangumi.tv (signed-in view).",
-      online_no_data: "No online samples yet.",
+      online_no_data: "No samples yet.",
       online_current: (n) => `${n} online now`,
       online_peak: (n) => `peak ${n}`,
       online_avg: (n) => `avg ${n}`,
+      metric_bangumi: "Bangumi online",
+      metric_traffic: "Site traffic",
+      traffic_current: (n) => `${n} viewing now`,
+      traffic_note: "Concurrent status-page viewers, sampled each minute — a proxy for whether people are flocking here because Bangumi is down.",
       now_label: "now",
       ago_label: (rel) => rel,
       footer_desc: "Independent, community-run availability monitor. Not affiliated with Bangumi.",
@@ -130,13 +134,17 @@
       section_unresolved: "未解决的事故",
       section_past: "历史事故", hint_past: "最近10天",
       section_probes: "探针节点",
-      section_online: "在线人数",
+      section_online: "活动",
       online_hint_24h: "最近24小时",
       online_note: "Bangumi online 人数历史。",
-      online_no_data: "暂无在线数据。",
+      online_no_data: "暂无数据。",
       online_current: (n) => `当前 ${n} 人在线`,
       online_peak: (n) => `峰值 ${n}`,
       online_avg: (n) => `平均值 ${n}`,
+      metric_bangumi: "班固米在线",
+      metric_traffic: "本站访问",
+      traffic_current: (n) => `当前 ${n} 人查看`,
+      traffic_note: "Bangumi Status 访问人数历史。",
       now_label: "现在",
       ago_label: (rel) => rel,
       footer_desc: "社区运营的Bangumi可用性监测。",
@@ -614,6 +622,7 @@
 
   // --- Online users chart --------------------------------------------------
   let onlineRange = "24h";
+  let onlineMetric = "bangumi"; // "bangumi" (bgm.tv online) | "traffic" (site viewers)
   let onlineIncidents = []; // incident windows from main-site auth components
 
   // uPlot-backed online chart. The library is vendored under /vendor/uplot and
@@ -701,7 +710,8 @@
       inc => (inc.end_ts || nowTs) > xs[0] && inc.start_ts < xs[xs.length - 1]);
 
     const vMax = Math.max(...high);
-    summaryEl.textContent = t("online_current", avg[avg.length - 1].toLocaleString()) +
+    const curKey = onlineMetric === "traffic" ? "traffic_current" : "online_current";
+    summaryEl.textContent = t(curKey, avg[avg.length - 1].toLocaleString()) +
       " · " + t("online_peak", vMax.toLocaleString());
 
     // The series shape is always [x, avg]; the area fill, min/max band and
@@ -879,11 +889,59 @@
     onlineResizeObs.observe(host);
   }
 
-  function renderOnlineChart(overall) {
-    const noteEl = document.getElementById("online-note");
-    if (noteEl) noteEl.textContent = t("online_note");
+  // Wire the metric switch + range tabs once. Each just updates state and
+  // reloads the series; drawOnlineChart manages the chart DOM (reusing the uPlot
+  // instance), so we leave the current chart in place during the fetch.
+  function wireActivityControls() {
+    const tabsEl = document.getElementById("online-tabs");
+    if (tabsEl && !tabsEl._wired) {
+      tabsEl._wired = true;
+      tabsEl.addEventListener("click", (e) => {
+        const btn = e.target.closest(".online-tab");
+        if (!btn || btn.dataset.range === onlineRange) return;
+        onlineRange = btn.dataset.range;
+        tabsEl.querySelectorAll(".online-tab").forEach(b => {
+          b.classList.toggle("active", b === btn);
+          b.setAttribute("aria-selected", b === btn ? "true" : "false");
+        });
+        loadActivitySeries();
+      });
+    }
+    const metricsEl = document.getElementById("online-metrics");
+    if (metricsEl && !metricsEl._wired) {
+      metricsEl._wired = true;
+      metricsEl.addEventListener("click", (e) => {
+        const btn = e.target.closest(".online-metric");
+        if (!btn || btn.dataset.metric === onlineMetric) return;
+        onlineMetric = btn.dataset.metric;
+        metricsEl.querySelectorAll(".online-metric").forEach(b => {
+          b.classList.toggle("active", b === btn);
+          b.setAttribute("aria-selected", b === btn ? "true" : "false");
+        });
+        loadActivitySeries();
+      });
+    }
+  }
 
-    // Collect incident windows from the three main sites (auth kind only).
+  // Fetch (or derive) the series for the current metric + range and draw it.
+  // Bangumi's 24h series is embedded in /api/status; everything else is fetched.
+  function loadActivitySeries(overall) {
+    const noteEl = document.getElementById("online-note");
+    if (noteEl) noteEl.textContent = t(onlineMetric === "traffic" ? "traffic_note" : "online_note");
+    if (onlineMetric === "bangumi" && onlineRange === "24h") {
+      drawOnlineChart((overall && overall.online) || (lastData && lastData.online) || []);
+      return;
+    }
+    const path = onlineMetric === "traffic" ? "/api/traffic" : "/api/online";
+    fetch(`${path}?range=${onlineRange}`)
+      .then(r => r.json())
+      .then(drawOnlineChart)
+      .catch(() => {});
+  }
+
+  function renderOnlineChart(overall) {
+    // Incident overlays from the three main sites (auth kind) — useful on both
+    // metrics (shows whether a traffic spike lines up with an outage).
     const mainDomains = new Set(["bgm.tv", "bangumi.tv", "chii.in"]);
     onlineIncidents = [];
     for (const c of (overall.components || [])) {
@@ -892,38 +950,8 @@
         if (inc && inc.status && inc.status !== "ok") onlineIncidents.push(inc);
       }
     }
-    // Wire up range tabs once
-    const tabsEl = document.getElementById("online-tabs");
-    if (tabsEl && !tabsEl._wired) {
-      tabsEl._wired = true;
-      tabsEl.addEventListener("click", async (e) => {
-        const btn = e.target.closest(".online-tab");
-        if (!btn) return;
-        const range = btn.dataset.range;
-        if (range === onlineRange) return;
-        onlineRange = range;
-        tabsEl.querySelectorAll(".online-tab").forEach(b => {
-          b.classList.toggle("active", b === btn);
-          b.setAttribute("aria-selected", b === btn ? "true" : "false");
-        });
-        // drawOnlineChart manages the chart DOM itself (reusing the uPlot
-        // instance across same-shape ranges), so leave the current chart in
-        // place during the fetch rather than flashing an empty state.
-        try {
-          const res = await fetch(`/api/online?range=${range}`);
-          const pts = await res.json();
-          drawOnlineChart(pts);
-        } catch (_) {}
-      });
-    }
-    if (onlineRange === "24h") {
-      drawOnlineChart(overall.online);
-    } else {
-      fetch(`/api/online?range=${onlineRange}`)
-        .then(r => r.json())
-        .then(pts => drawOnlineChart(pts))
-        .catch(() => {});
-    }
+    wireActivityControls();
+    loadActivitySeries(overall);
   }
 
   // --- Component row -------------------------------------------------------
@@ -1560,6 +1588,8 @@
     setT(".inc-section:not(#unresolved-section) .section-head__hint", "hint_past");
     setT(".probes-section h2", "section_probes");
     setT(".online-section h2", "section_online");
+    setT('.online-metric[data-metric="bangumi"]', "metric_bangumi");
+    setT('.online-metric[data-metric="traffic"]', "metric_traffic");
 
     setT(".ftr__desc", "footer_desc");
     setT("#subscribe-title", "modal_title");
