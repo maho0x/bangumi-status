@@ -1,24 +1,24 @@
 /* --- Quiet Instrument · Bangumi Status ------------------------------------- */
 
 :root {
-  --bg:           #fbfaf7;
+  --bg:           #f8f7f3;
   --bg-grain:    rgba(0,0,0,0.015);
   --surface:      #ffffff;
-  --surface-2:    #f5f3ee;
-  --surface-sunk: #f7f5f0;
-  --border:       #ecebe4;
-  --border-strong:#d9d7ce;
-  --text:         #1b1d1a;
-  --text-dim:     #6a6d66;
-  --text-faint:   #9a9c94;
+  --surface-2:    #f4f2ec;
+  --surface-sunk: #f6f4ef;
+  --border:       #eae8e1;
+  --border-strong:#d8d5cc;
+  --text:         #2c2a24;
+  --text-dim:     #6b6a63;
+  --text-faint:   #9a978e;
 
   --brand:        #f09199;
   --brand-ink:    #F77E94;
   --accent:       #f09199;
 
-  --ok:           #7DD9B0;
-  --ok-soft:      #e5f2ea;
-  --ok-line:      #b3d4bf;
+  --ok:           #85c99b;
+  --ok-soft:      #e8f1e7;
+  --ok-line:      #b6d2bb;
 
   --degraded:     #D9C775;
   --degraded-soft:#f7ecd3;
@@ -37,9 +37,11 @@
   --radius:    10px;
   --radius-sm: 6px;
 
-  --font-sans:   "Instrument Sans", ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  --font-serif:  "Instrument Serif", Georgia, "Times New Roman", serif;
+  --font-sans:   "Hanken Grotesk", ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  /* No serif anywhere — alias --font-serif to the sans face so legacy usages (brand, headings) render sans too. */
+  --font-serif:  var(--font-sans);
   --font-mono:   "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-body:   var(--font-sans);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -59,9 +61,9 @@
     --brand-ink:    #F77E94;
     --accent:       #f4a3aa;
 
-    --ok:           #7DD9B0;
-    --ok-soft:      #112418;
-    --ok-line:      #23452e;
+    --ok:           #8ccfa3;
+    --ok-soft:      #11241a;
+    --ok-line:      #294a36;
 
     --degraded:     #D9C775;
     --degraded-soft:#2a2212;
@@ -86,7 +88,7 @@ html, body {
   padding: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: var(--font-sans);
+  font-family: var(--font-body);
   font-size: 14.5px;
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
@@ -173,6 +175,9 @@ body[data-page="wiki"] .top-nav a[data-route-link="wiki"] {
   align-items: baseline;
   font-size: 23px;
   color: var(--text);
+  /* Keep the original wordmark face (Instrument Sans) even though the rest of
+     the site moved to Hanken Grotesk. */
+  font-family: "Instrument Sans", var(--font-sans);
 }
 .brand:hover { text-decoration: none; }
 .brand-badge {
@@ -225,21 +230,20 @@ body[data-page="wiki"] .top-nav a[data-route-link="wiki"] {
   cursor: pointer;
   letter-spacing: 0;
   box-shadow: var(--shadow-sm);
-  transition: border-color 0.15s ease, background 0.15s ease, transform 0.12s ease, color 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
 }
 .subscribe-btn svg {
   width: 13px;
   height: 13px;
   color: var(--brand-ink);
-  transition: color 0.15s ease;
 }
+/* Match the top-nav hover language: gentle surface-2 fill, no colour shift, no lift. */
 .subscribe-btn:hover {
-  border-color: var(--brand);
-  color: var(--brand-ink);
-  transform: translateY(-1px);
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  color: var(--text);
 }
-.subscribe-btn:hover svg { color: var(--brand); }
-.subscribe-btn:active { transform: translateY(0); }
+.subscribe-btn:active { background: var(--surface-2); }
 
 @media (max-width: 640px) {
   .container { padding: 0 18px; }
@@ -1561,14 +1565,10 @@ body[data-page="wiki"] .container {
   margin-bottom: 8px;
 }
 .modal__head h2 {
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 600;
   letter-spacing: -0.015em;
-  font-family: var(--font-serif);
-  font-style: italic;
-  font-weight: 500;
-  color: var(--brand-ink);
-  font-size: 22px;
+  color: var(--text);
 }
 .modal__close {
   background: none;
@@ -1647,20 +1647,28 @@ body[data-page="wiki"] .container {
 }
 .sub-url:focus { outline: 2px solid color-mix(in srgb, var(--brand) 60%, transparent); outline-offset: 1px; border-color: var(--brand); }
 .copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-family: var(--font-sans);
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--surface);
   background: var(--text);
   border: 1px solid var(--text);
-  padding: 6px 14px;
-  border-radius: 6px;
+  min-height: 32px;
+  padding: 4px 16px;
+  border-radius: 999px;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.15s ease, color 0.15s ease;
+  text-decoration: none;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
-.copy-btn:hover { background: var(--brand-ink); border-color: var(--brand-ink); color: #fff; }
+.copy-btn:hover { background: var(--brand-ink); border-color: var(--brand-ink); color: #fff; text-decoration: none; }
 .copy-btn.copied { background: var(--ok); border-color: var(--ok); color: #fff; }
+/* Telegram row: button sits inline with the icon + text, vertically centered. */
+.sub-option__row--inline { align-items: center; }
+.sub-option__row--inline .copy-btn { flex-shrink: 0; }
 
 /* --- Footer link --------------------------------------------------------- */
 .ftr__link {

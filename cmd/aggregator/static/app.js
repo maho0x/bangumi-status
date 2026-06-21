@@ -729,7 +729,7 @@
     host.className = "online-uplot-host";
     chartEl.appendChild(host);
 
-    const ok = cssVar("--ok", "#7DD9B0");
+    const ok = cssVar("--ok", "#85c99b");
     const grid = cssVar("--border", "#272a26");
     const axis = cssVar("--text-faint", "#9a9c94");
     const degraded = cssVar("--degraded", "#D9C775");
@@ -1310,7 +1310,7 @@
   // Distinct line colors for the multi-series wiki charts (longest set is the
   // 8-series replies breakdown).
   const WIKI_PALETTE = [
-    "#f09199", "#7DD9B0", "#6CA0DC", "#D9C775", "#C58FD9",
+    "#f09199", "#85c99b", "#6CA0DC", "#D9C775", "#C58FD9",
     "#E0936B", "#5FC9C2", "#D97A92", "#9DC468", "#B08CC4",
   ];
   let wikiCharts = []; // [{ u, node }]
