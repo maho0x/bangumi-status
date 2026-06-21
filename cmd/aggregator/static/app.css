@@ -271,7 +271,7 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
   box-shadow: var(--shadow-md);
   position: relative;
   overflow: hidden;
-  transition: border-color 0.3s ease, background 0.3s ease;
+  transition: border-color 0.2s ease, background 0.2s ease;
 }
 .banner::before {
   content: "";
@@ -279,7 +279,7 @@ main.container { padding-top: 40px; padding-bottom: 80px; }
   inset: 0 auto 0 0;
   width: 4px;
   background: var(--border-strong);
-  transition: background 0.3s ease;
+  transition: background 0.2s ease;
 }
 .banner__left {
   display: flex;
@@ -681,7 +681,7 @@ body[data-page="wiki"] .container {
   background-repeat: no-repeat;
   flex-shrink: 0;
   image-rendering: pixelated;
-  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: transform 0.2s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 .likes_grid .item:hover .emoji { transform: scale(1.12) rotate(-4deg); }
 .likes_grid .item .num {
@@ -738,7 +738,7 @@ body[data-page="wiki"] .container {
   background-size: contain;
   flex-shrink: 0;
   opacity: 0.7;
-  transition: opacity 0.18s ease, transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: opacity 0.18s ease, transform 0.25s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 .rx-dd a.icon.like_dropdown:hover .ico,
 .rx-dd.open .ico { opacity: 1; color: var(--brand-ink); transform: scale(1.08); }
@@ -768,7 +768,7 @@ body[data-page="wiki"] .container {
   transform: translateY(4px) scale(0.98);
   transform-origin: bottom right;
   transition: opacity 0.15s ease,
-              transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1),
+              transform 0.18s cubic-bezier(0.22, 0.61, 0.36, 1),
               visibility 0s 0.18s;
   pointer-events: none;
 }
@@ -778,12 +778,12 @@ body[data-page="wiki"] .container {
   transform: none;
   pointer-events: auto;
   transition: opacity 0.15s ease,
-              transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1),
+              transform 0.18s cubic-bezier(0.22, 0.61, 0.36, 1),
               visibility 0s 0s;
 }
 .rx-grid li { margin: 0; padding: 0; list-style: none; opacity: 0; transform: translateY(2px); }
 .rx-dd.open .rx-grid li {
-  animation: rx-item-in 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  animation: rx-item-in 0.2s cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
 }
 .rx-dd.open .rx-grid li:nth-child(1)  { animation-delay: 0.02s; }
 .rx-dd.open .rx-grid li:nth-child(2)  { animation-delay: 0.04s; }
@@ -842,7 +842,7 @@ body[data-page="wiki"] .container {
   height: 22px;
   display: block;
   image-rendering: pixelated;
-  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: transform 0.2s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 .rx-grid li a:hover img.emoji { transform: scale(1.05); }
 
@@ -894,15 +894,17 @@ body[data-page="wiki"] .container {
 /* Guest rows hidden when group lacks .show-guest — regardless of status. */
 /* Guest rows are kept in the DOM and animated open/closed via .show-guest. */
 .component[data-kind="guest"] {
-  max-height: 280px;
+  max-height: 180px;
   overflow: hidden;
+  /* One duration + easing for every animated property so the row opens/closes
+     as a single coherent motion (no padding/border lagging behind max-height). */
   transition:
     background 0.15s ease,
-    max-height 380ms cubic-bezier(0.22, 0.61, 0.36, 1),
-    opacity 220ms ease,
-    padding-top 380ms cubic-bezier(0.22, 0.61, 0.36, 1),
-    padding-bottom 380ms cubic-bezier(0.22, 0.61, 0.36, 1),
-    border-top-width 380ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    max-height 240ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    opacity 240ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    padding-top 240ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    padding-bottom 240ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    border-top-width 240ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 /* Once probe-detail is expanded, the 280px cap clips the probe list (the
    .show-guest collapse animation needs a finite max-height, but the open
@@ -1025,11 +1027,11 @@ body[data-page="wiki"] .container {
   border-top: 1px dashed var(--border-strong);
   border-top-width: 0;
   transition:
-    max-height 380ms cubic-bezier(0.22, 0.61, 0.36, 1),
-    opacity 240ms ease,
-    margin-top 380ms cubic-bezier(0.22, 0.61, 0.36, 1),
-    padding-top 380ms cubic-bezier(0.22, 0.61, 0.36, 1),
-    border-top-width 380ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    max-height 240ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    opacity 240ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    margin-top 240ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    padding-top 240ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    border-top-width 240ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 .component.open .probe-detail {
   /* max-height inline-set by JS to scrollHeight; cleared after open animation. */
@@ -1153,7 +1155,7 @@ body[data-page="wiki"] .container {
 .probe-list.animating {
   overflow: hidden;
   transition:
-    max-height 380ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    max-height 240ms cubic-bezier(0.22, 0.61, 0.36, 1),
     opacity 240ms ease;
 }
 .probe-list.is-collapsed {
@@ -1452,13 +1454,14 @@ body[data-page="wiki"] .container {
 .inc-day__entry[data-kind="guest"] {
   max-height: 160px;
   overflow: hidden;
+  /* Single coherent motion — every property shares the same duration/easing. */
   transition:
-    max-height 380ms cubic-bezier(0.22, 0.61, 0.36, 1),
-    opacity 220ms ease,
-    margin-top 380ms cubic-bezier(0.22, 0.61, 0.36, 1),
-    padding-top 380ms cubic-bezier(0.22, 0.61, 0.36, 1),
-    padding-bottom 380ms cubic-bezier(0.22, 0.61, 0.36, 1),
-    border-top-width 380ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    max-height 240ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    opacity 240ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    margin-top 240ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    padding-top 240ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    padding-bottom 240ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    border-top-width 240ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 .inc-day:not(.show-guest) .inc-day__entry[data-kind="guest"] {
   max-height: 0;
@@ -1547,7 +1550,7 @@ body[data-page="wiki"] .container {
   border-radius: var(--radius);
   box-shadow: 0 24px 80px -20px rgba(26,24,20,0.25), 0 4px 12px -4px rgba(26,24,20,0.1);
   padding: 22px 24px 24px;
-  animation: modalIn 0.22s cubic-bezier(.2,.9,.3,1.1);
+  animation: modalIn 0.18s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 @keyframes fadeIn {
   from { opacity: 0; }
@@ -1783,28 +1786,28 @@ body[data-page="wiki"] .container {
    color, badge, or pill actually changes. Kept conservative on purpose. */
 
 .strip-cell {
-  transition: background 320ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  transition: background 200ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 .banner__icon {
-  transition: background 360ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  transition: background 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 .banner__title, .banner__sub {
-  transition: color 280ms ease;
+  transition: color 190ms ease;
 }
 .status-dot {
-  transition: background 280ms ease;
+  transition: background 190ms ease;
 }
 .inc-card {
-  transition: border-left-color 280ms ease, background 280ms ease;
+  transition: border-left-color 190ms ease, background 190ms ease;
 }
 .inc-day__dot {
-  transition: background 280ms ease;
+  transition: background 190ms ease;
 }
 .guest-badge {
-  transition: background 280ms ease;
+  transition: background 190ms ease;
 }
 .probe-card .pill {
-  transition: background 280ms ease, color 280ms ease, border-color 280ms ease;
+  transition: background 190ms ease, color 190ms ease, border-color 190ms ease;
 }
 
 /* Shared fade-in keyframe used by several entry animations across the page. */

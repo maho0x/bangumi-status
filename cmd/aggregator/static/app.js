@@ -970,7 +970,7 @@
       void detail.offsetHeight;
       row.classList.remove("open");
       detail.style.maxHeight = "0px";
-      detail._animTimer = setTimeout(() => { detail.style.maxHeight = ""; }, 440);
+      detail._animTimer = setTimeout(() => { detail.style.maxHeight = ""; }, 280);
     } else {
       // Opening: ramp height from 0 → scrollHeight, then mark uncapped so future
       // SSE-driven probe additions can grow the panel beyond the recorded value.
@@ -981,7 +981,7 @@
           detail.classList.add("is-open");
           detail.style.maxHeight = "";
         }
-      }, 440);
+      }, 280);
     }
   }
 
@@ -1738,7 +1738,7 @@
       animTimer = setTimeout(() => {
         probeList.classList.remove("animating");
         probeList.style.maxHeight = "";     // release cap so DOM updates can grow
-      }, 440);
+      }, 280);
     };
     const close = () => {
       clearTimeout(animTimer);
@@ -1751,7 +1751,7 @@
         probeList.classList.remove("animating", "is-collapsed");
         probeList.hidden = true;
         probeList.style.maxHeight = "";
-      }, 440);
+      }, 280);
     };
     const toggle = () => {
       const expanded = probesToggle.getAttribute("aria-expanded") === "true";
