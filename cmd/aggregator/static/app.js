@@ -43,6 +43,9 @@
       dur_m: (n) => `${n}m`,
       dur_hm: (h, m) => `${h}h ${m}m`,
       dur_h: (n) => `${n}h`,
+      dur_d: (n) => `${n}d`,
+      dur_dh: (d, h) => `${d}d ${h}h`,
+      held_label: "Ongoing for",
       ongoing: "ongoing",
       last_updated: "Last updated", auto_refresh: "auto-refresh 30s",
       atom_feed: "Atom feed", error_load: "Unable to load status",
@@ -123,6 +126,9 @@
       dur_m: (n) => `${n} 分钟`,
       dur_hm: (h, m) => `${h} 小时 ${m} 分钟`,
       dur_h: (n) => `${n} 小时`,
+      dur_d: (n) => `${n} 天`,
+      dur_dh: (d, h) => `${d} 天 ${h} 小时`,
+      held_label: "已持续",
       ongoing: "进行中",
       last_updated: "最后更新", auto_refresh: "30秒自动刷新",
       atom_feed: "Atom 订阅", error_load: "无法加载状态",
@@ -321,6 +327,38 @@
     return t("dur_hm", h, m);
   };
 
+  // Like fmtDuration but rolls over into days, for long-lived banner states.
+  const fmtDurationLong = (s) => {
+    if (s == null || s <= 0) return "—";
+    if (s < 86400) return fmtDuration(s);
+    const d = Math.floor(s / 86400);
+    const h = Math.round((s % 86400) / 3600);
+    return h === 0 ? t("dur_d", d) : t("dur_dh", d, h);
+  };
+
+  // When did the current outage start? Returns the earliest start_ts among the
+  // currently-affected non-guest components, taking each component's most recent
+  // incident as the one in progress. Returns null if none is affected.
+  //
+  // Note: the live component `status` and the `incidents` list come from
+  // different caches — status is live, incidents refresh only every few minutes,
+  // so an ongoing incident's end_ts lags well behind `now`. We must NOT gate on
+  // end_ts freshness; the live status already tells us the component is affected,
+  // and the latest incident's start is the best estimate of when it began.
+  function outageStartedAt(overall) {
+    const nonGuest = (overall.components || []).filter(c => c.kind !== "guest");
+    let start = null;
+    for (const c of nonGuest) {
+      if (c.status === "ok") continue;
+      let latest = null;
+      for (const inc of (c.incidents || [])) {
+        if (latest == null || inc.end_ts > latest.end_ts) latest = inc;
+      }
+      if (latest && (start == null || latest.start_ts < start)) start = latest.start_ts;
+    }
+    return start;
+  }
+
   const isoDayLocal = (ts) => {
     const d = new Date(ts * 1000);
     const y = d.getFullYear();
@@ -387,8 +425,19 @@
     else subText = t("banner_sub_affected", affected.length, total);
     setText(banner.querySelector(".banner__sub"), subText);
 
-    const avg = nonGuest.reduce((a, c) => a + (c.uptime || 0), 0) / (nonGuest.length || 1);
-    reconcile(meta, [{ key: "uptime", label: t("uptime_30d"), value: fmtUptime(avg) }],
+    const items = [];
+    if (status !== "ok") {
+      // During an outage/degradation, show only how long it has persisted —
+      // the 30-day uptime figure is a distraction at that moment.
+      const since = outageStartedAt(overall);
+      if (since != null) {
+        items.push({ key: "held", label: t("held_label"), value: fmtDurationLong(overall.updated_at - since) });
+      }
+    } else {
+      const avg = nonGuest.reduce((a, c) => a + (c.uptime || 0), 0) / (nonGuest.length || 1);
+      items.push({ key: "uptime", label: t("uptime_30d"), value: fmtUptime(avg) });
+    }
+    reconcile(meta, items,
       it => it.key,
       it => {
         const dt = el("dt", {}, it.label);
@@ -399,8 +448,6 @@
       },
       (div, it) => { setText(div._dt, it.label); setText(div._dd, it.value); }
     );
-
-    setText(document.getElementById("updated"), fmtRelative(overall.updated_at));
   }
 
   // --- Unresolved incidents ------------------------------------------------
@@ -1629,14 +1676,9 @@
     if (subDescs[1])  subDescs[1].textContent  = t("sub_tg_desc");
     if (subDescs[2])  subDescs[2].textContent  = t("sub_live_desc");
 
-    // Footer meta: "Last updated <span#updated> · auto-refresh ..."
+    // Footer meta: "<auto-refresh> · <Atom feed>"
     const ftrSpans = document.querySelectorAll(".ftr__meta > span");
-    if (ftrSpans[0]) {
-      for (const node of ftrSpans[0].childNodes) {
-        if (node.nodeType === Node.TEXT_NODE) { node.textContent = t("last_updated") + " "; break; }
-      }
-    }
-    if (ftrSpans[2]) ftrSpans[2].textContent = t("auto_refresh");
+    if (ftrSpans[0]) ftrSpans[0].textContent = t("auto_refresh");
 
     // Copy button (only if not mid-copy)
     const copyBtn = document.getElementById("copy-feed");
