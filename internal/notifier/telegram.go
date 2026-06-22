@@ -780,15 +780,19 @@ func formatSummary(overall *types.Overall) string {
 	type domainInfo struct {
 		status types.Status
 		uptime float64
-		initd  bool
 	}
 	domains := map[string]*domainInfo{}
 	order := []string{"bgm.tv", "bangumi.tv", "chii.in", "next.bgm.tv", "api.bgm.tv"}
 	for _, d := range order {
 		domains[d] = &domainInfo{status: types.StatusOK, uptime: 100}
 	}
-	authUptimeDomains := map[string]bool{"bgm.tv": true, "bangumi.tv": true, "chii.in": true}
 	for _, c := range overall.Components {
+		// The pinned summary tracks authenticated access only; guest/public
+		// endpoint results are neither shown nor allowed to affect a domain's
+		// status or uptime.
+		if c.Kind == types.KindGuest {
+			continue
+		}
 		d, ok := domains[c.Domain]
 		if !ok {
 			continue
@@ -796,32 +800,27 @@ func formatSummary(overall *types.Overall) string {
 		if rank[c.Status] > rank[d.status] {
 			d.status = c.Status
 		}
-		if authUptimeDomains[c.Domain] {
-			if c.Kind == types.KindAuth {
-				d.uptime = c.Uptime
-				d.initd = true
-			}
-		} else {
-			if !d.initd || c.Uptime < d.uptime {
-				d.uptime = c.Uptime
-				d.initd = true
-			}
-		}
+		d.uptime = c.Uptime
 	}
 
-	// Overall headline.
-	headEmoji := statusEmoji[overall.Status]
-	if headEmoji == "" {
-		headEmoji = "⚪️"
-	}
-	headline := "全部系统正常"
+	// Overall headline, derived from the auth-only domains so it stays
+	// consistent with the table (guest/public endpoints never escalate here).
+	overallStatus := types.StatusOK
 	affected := 0
 	for _, d := range domains {
 		if d.status != types.StatusOK {
 			affected++
 		}
+		if rank[d.status] > rank[overallStatus] {
+			overallStatus = d.status
+		}
 	}
-	switch overall.Status {
+	headEmoji := statusEmoji[overallStatus]
+	if headEmoji == "" {
+		headEmoji = "⚪️"
+	}
+	headline := "全部系统正常"
+	switch overallStatus {
 	case types.StatusDegraded:
 		headline = fmt.Sprintf("部分服务异常（%d 个）", affected)
 	case types.StatusDown:
