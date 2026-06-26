@@ -204,67 +204,11 @@ func (t *Telegram) Process(comps []types.ComponentStatus) {
 	}
 }
 
-// handleDegradedRecoveries edits the original degraded alert message instead
-// of opening a separate recovery thread. If some entries in the group are
-// still degraded, the same message is edited down to the remaining entries.
+// handleDegradedRecoveries is intentionally a no-op: degraded alerts do not
+// get a corresponding "活了" message. State cleanup is already done in Process.
 func (t *Telegram) handleDegradedRecoveries(recoveries []recoveryInfo) {
-	byGroup := map[int][]recoveryInfo{}
 	for _, r := range recoveries {
-		if r.groupID == 0 {
-			t.handleRecoveries([]recoveryInfo{r})
-			continue
-		}
-		byGroup[r.groupID] = append(byGroup[r.groupID], r)
-	}
-
-	for msgID, rs := range byGroup {
-		var domains []string
-		var maxDur time.Duration
-		var startedAt time.Time
-		var recoveredAt time.Time
-		for _, r := range rs {
-			domains = append(domains, html.EscapeString(r.domain))
-			if r.dur > maxDur {
-				maxDur = r.dur
-			}
-			if startedAt.IsZero() || r.startedAt.Before(startedAt) {
-				startedAt = r.startedAt
-			}
-			if recoveredAt.IsZero() || r.at.After(recoveredAt) {
-				recoveredAt = r.at
-			}
-		}
-
-		t.mu.Lock()
-		group := t.groups[msgID]
-		if group == nil {
-			t.mu.Unlock()
-			t.handleRecoveries(rs)
-			continue
-		}
-		text := renderGroupText(group)
-		resolved := len(group.Entries) == 0
-		if resolved {
-			text = renderDegradedRecoveryText(&recoveryGroup{
-				MessageID:   msgID,
-				OpenedAt:    recoveredAt,
-				StartedAt:   startedAt,
-				RecoveredAt: recoveredAt,
-				Domains:     domains,
-				MaxDur:      maxDur,
-			})
-		}
-		t.mu.Unlock()
-
-		switch t.editMessage(msgID, text) {
-		case editOK:
-			log.Printf("telegram: degraded recovery edited msg %d", msgID)
-		case editFailed:
-			log.Printf("telegram: degraded recovery edit failed for msg %d", msgID)
-		case editGone:
-			log.Printf("telegram: degraded msg %d gone, sending recovery", msgID)
-			t.handleRecoveries(rs)
-		}
+		log.Printf("telegram: degraded recovery for %s (silent)", r.domain)
 	}
 }
 
@@ -367,10 +311,6 @@ func renderRecoveryText(rg *recoveryGroup) string {
 		fmtBeijingMoment(rg.StartedAt, rg.RecoveredAt), fmtBeijingMoment(rg.RecoveredAt, rg.StartedAt), strings.Join(rg.Domains, "、"), fmtApproxDuration(rg.MaxDur))
 }
 
-func renderDegradedRecoveryText(rg *recoveryGroup) string {
-	return fmt.Sprintf("Bangumi 活了！\n开始于 %s\n恢复于 %s\n<b>%s</b> 恢复正常，这次大概降级了 <b>%s</b>。\n#活了",
-		fmtBeijingMoment(rg.StartedAt, rg.RecoveredAt), fmtBeijingMoment(rg.RecoveredAt, rg.StartedAt), strings.Join(rg.Domains, "、"), fmtApproxDuration(rg.MaxDur))
-}
 
 // handleOutage either edits the active group's message (if still within the
 // merge window) or opens a new group with a fresh Telegram message.
