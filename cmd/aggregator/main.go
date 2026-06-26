@@ -57,6 +57,15 @@ type server struct {
 	cachedAt time.Time
 	sfGroup  singleflight.Group
 
+	// outageSince records, per component, the unix time its live status first
+	// became non-ok and has stayed non-ok since. It is the single source of
+	// truth for the banner's "已持续" duration: derived from the same live
+	// RollupStatus signal as the status itself, so the two can never disagree.
+	// Stamped into ComponentStatus.Since on each computeOverall; restored from
+	// the persisted status cache on startup so it survives restarts.
+	outageMu    sync.Mutex
+	outageSince map[store.ComponentKey]int64
+
 	// refreshCh coalesces "data changed, refresh soon" pings from ingest into
 	// the cacheRefreshLoop. Buffered size 1 so a burst of ingests collapses to
 	// at most one pending refresh; the loop applies a short debounce on top.
@@ -196,7 +205,7 @@ func main() {
 	}
 
 	statusCachePath := stringFromEnv("STATUS_CACHE_PATH", "/var/lib/bangumi-status/status-cache.json")
-	s := &server{store: st, secret: secret, tokenPrefixes: tokenPrefixes, onlineSourceProbe: onlineSourceProbe, wikiStatsURL: wikiStatsURL, statusCachePath: statusCachePath, notifier: tg, rxHub: newReactionHub(), statusHub: newReactionHub(), refreshCh: make(chan struct{}, 1)}
+	s := &server{store: st, secret: secret, tokenPrefixes: tokenPrefixes, onlineSourceProbe: onlineSourceProbe, wikiStatsURL: wikiStatsURL, statusCachePath: statusCachePath, notifier: tg, rxHub: newReactionHub(), statusHub: newReactionHub(), refreshCh: make(chan struct{}, 1), outageSince: map[store.ComponentKey]int64{}}
 	s.loadStatusCache()
 
 	mux := http.NewServeMux()
@@ -576,6 +585,16 @@ func (s *server) loadStatusCache() {
 	s.cached = &cached
 	s.cachedAt = time.Now().Add(-31 * time.Second)
 	s.mu.Unlock()
+	// Restore per-component outage-start times so the banner duration survives a
+	// restart instead of resetting to "just now". Since values are absolute unix
+	// timestamps, they remain correct across the downtime.
+	s.outageMu.Lock()
+	for _, c := range cached.Components {
+		if c.Status != types.StatusOK && c.Since != 0 {
+			s.outageSince[store.ComponentKey{Domain: c.Domain, Kind: c.Kind}] = c.Since
+		}
+	}
+	s.outageMu.Unlock()
 	s.notifier.UpdateSummary(&cached)
 	log.Printf("loaded status cache from %s", s.statusCachePath)
 }
@@ -1070,24 +1089,48 @@ func (s *server) computeOverall(ctx context.Context) (*types.Overall, error) {
 		return nil, err
 	}
 
+	now := time.Now().Unix()
 	results := make([]types.ComponentStatus, len(allComponents))
+	s.outageMu.Lock()
 	for i, c := range allComponents {
 		key := store.ComponentKey{Domain: c.Domain, Kind: c.Kind}
 		views := viewsByComponent[key]
-		currentStatus, last := store.RollupStatus(views)
+		currentStatus, last, active, bad := store.RollupStatusDetailed(views)
+		// Track when the current non-ok streak began. The first tick a
+		// component goes non-ok stamps `now`; subsequent ticks keep it stable;
+		// returning to ok clears it. This is the single source of truth for the
+		// banner duration — same signal as the live status, so they can't drift.
+		var since int64
+		if currentStatus != types.StatusOK {
+			since = s.outageSince[key]
+			if since == 0 {
+				since = now
+				s.outageSince[key] = since
+			}
+		} else {
+			delete(s.outageSince, key)
+		}
 		h := histories[key]
+		// The incident walk is cached coarsely and lags; fold the live outage in
+		// so the list/chart show one ongoing incident anchored at `since`.
+		incidents := h.incidents
+		if since != 0 {
+			incidents = store.MergeOngoingIncident(h.incidents, since, now, currentStatus, bad, active)
+		}
 		results[i] = types.ComponentStatus{
 			Domain:     c.Domain,
 			Kind:       c.Kind,
 			Label:      c.Label,
 			Status:     currentStatus,
 			Uptime:     h.uptime,
+			Since:      since,
 			Days:       h.days,
 			LastCheck:  last,
 			ProbeViews: views,
-			Incidents:  h.incidents,
+			Incidents:  incidents,
 		}
 	}
+	s.outageMu.Unlock()
 
 	probes, err := s.store.Probes(ctx)
 	if err != nil {
@@ -1098,7 +1141,7 @@ func (s *server) computeOverall(ctx context.Context) (*types.Overall, error) {
 		return nil, err
 	}
 
-	out := &types.Overall{UpdatedAt: time.Now().Unix()}
+	out := &types.Overall{UpdatedAt: now}
 	var worstStatus = types.StatusOK
 	for _, cs := range results {
 		out.Components = append(out.Components, cs)

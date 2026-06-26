@@ -811,38 +811,73 @@ ORDER BY c.domain, c.kind, c.region, c.probe`,
 	return out, rows.Err()
 }
 
-// RollupStatus computes the current status for (domain, kind) from already-fetched views.
-// Call LatestPerProbeBatch first, then pass the per-component views here to avoid a redundant DB round-trip.
-func RollupStatus(views []types.ProbeView) (types.Status, int64) {
-	if len(views) == 0 {
-		return types.StatusOK, 0
-	}
-	var ok, deg, down int
-	var latest int64
-	for _, v := range views {
-		if v.Region == statusExcludedRegion {
+// rollupStaleSec is the rolling window within which a probe's last observation
+// still counts toward the rolled-up status. Probes idle longer are treated as
+// offline and excluded — shared by live status and the incident walk so the two
+// can never disagree on whether a component is currently affected.
+const rollupStaleSec = int64(180)
+
+// rollupVote is one probe's contribution to a rollup decision.
+type rollupVote struct {
+	status types.Status
+	ts     int64
+}
+
+// rollup applies the staleness gate and quorum rule. Votes from probes last
+// seen more than rollupStaleSec before `now` are ignored. Returns the escalated
+// status, the active probe count, and the number reporting non-ok. This is the
+// single rollup rule used by both RollupStatus (live) and the incident walk.
+func rollup(votes []rollupVote, now int64) (status types.Status, active, bad int) {
+	var deg, down int
+	for _, v := range votes {
+		if now-v.ts > rollupStaleSec {
 			continue
 		}
-		if v.TS > latest {
-			latest = v.TS
-		}
-		switch v.Status {
-		case types.StatusOK:
-			ok++
+		active++
+		switch v.status {
 		case types.StatusDegraded:
 			deg++
 		case types.StatusDown:
 			down++
 		}
 	}
-	quorum := quorumFor(ok + deg + down)
+	bad = down + deg
+	quorum := quorumFor(active)
 	if down >= quorum {
-		return types.StatusDown, latest
+		return types.StatusDown, active, bad
 	}
 	if down+deg >= quorum {
-		return types.StatusDegraded, latest
+		return types.StatusDegraded, active, bad
 	}
-	return types.StatusOK, latest
+	return types.StatusOK, active, bad
+}
+
+// RollupStatus computes the current status for (domain, kind) from already-fetched views.
+// Call LatestPerProbeBatch first, then pass the per-component views here to avoid a redundant DB round-trip.
+func RollupStatus(views []types.ProbeView) (types.Status, int64) {
+	st, last, _, _ := RollupStatusDetailed(views)
+	return st, last
+}
+
+// RollupStatusDetailed is RollupStatus plus the active/non-ok probe counts at
+// the current instant, used to seed an ongoing incident's peak figures.
+func RollupStatusDetailed(views []types.ProbeView) (status types.Status, last int64, active, bad int) {
+	if len(views) == 0 {
+		return types.StatusOK, 0, 0, 0
+	}
+	now := time.Now().Unix()
+	votes := make([]rollupVote, 0, len(views))
+	for _, v := range views {
+		if v.Region == statusExcludedRegion {
+			continue
+		}
+		if v.TS > last {
+			last = v.TS
+		}
+		votes = append(votes, rollupVote{status: v.Status, ts: v.TS})
+	}
+	status, active, bad = rollup(votes, now)
+	return status, last, active, bad
 }
 
 // Incidents returns contiguous non-ok windows for (domain, kind) within [since, now].
@@ -934,30 +969,11 @@ func (a *incidentAccumulator) closeWindow() {
 }
 
 func (a *incidentAccumulator) rollup(now int64) (status types.Status, active, bad int) {
-	const staleSec = int64(180)
-	var deg, down int
+	votes := make([]rollupVote, 0, len(a.probes))
 	for _, p := range a.probes {
-		if now-p.ts > staleSec {
-			continue
-		}
-		active++
-		switch p.status {
-		case types.StatusOK:
-		case types.StatusDegraded:
-			deg++
-		case types.StatusDown:
-			down++
-		}
+		votes = append(votes, rollupVote{status: p.status, ts: p.ts})
 	}
-	bad = down + deg
-	quorum := quorumFor(active)
-	if down >= quorum {
-		return types.StatusDown, active, bad
-	}
-	if down+deg >= quorum {
-		return types.StatusDegraded, active, bad
-	}
-	return types.StatusOK, active, bad
+	return rollup(votes, now)
 }
 
 func incidentStatusRank(s types.Status) int {
@@ -969,6 +985,45 @@ func incidentStatusRank(s types.Status) int {
 	default:
 		return 0
 	}
+}
+
+// MergeOngoingIncident folds the currently-active outage into the (coarsely
+// cached, possibly lagging) incident walk so the list and chart always show one
+// ongoing incident that starts at `since` and stays open to `now` — consistent
+// with the banner's "已持续" duration. Resolved windows are kept untouched; any
+// walk window overlapping the current outage is absorbed into the synthetic
+// ongoing one, carrying its peak counts and worst severity. `liveBad`/`liveTotal`
+// seed the peak from the current instant so a just-started outage still shows
+// sensible figures before the walk catches up. Returns oldest-first.
+func MergeOngoingIncident(walk []types.Incident, since, now int64, status types.Status, liveBad, liveTotal int) []types.Incident {
+	ongoing := types.Incident{
+		StartTS:   since,
+		EndTS:     now,
+		Status:    status,
+		PeakDown:  liveBad,
+		PeakTotal: liveTotal,
+	}
+	out := make([]types.Incident, 0, len(walk)+1)
+	for _, inc := range walk {
+		if inc.EndTS < since {
+			out = append(out, inc) // resolved before the current outage began
+			continue
+		}
+		// Overlaps the current outage — absorb its severity and peak.
+		if incidentStatusRank(inc.Status) > incidentStatusRank(ongoing.Status) {
+			ongoing.Status = inc.Status
+		}
+		if inc.PeakDown > ongoing.PeakDown {
+			ongoing.PeakDown = inc.PeakDown
+			ongoing.PeakTotal = inc.PeakTotal
+		}
+	}
+	ongoing.DurationS = int(now - since)
+	if ongoing.DurationS < 60 {
+		ongoing.DurationS = 60
+	}
+	out = append(out, ongoing)
+	return out
 }
 
 // PurgeOlderThan drops daily partitions of `checks` whose entire range is

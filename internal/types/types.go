@@ -161,6 +161,7 @@ type ComponentStatus struct {
 	Label      string      `json:"label"`
 	Status     Status      `json:"status"`              // current rolled-up status
 	Uptime     float64     `json:"uptime"`              // 0-100
+	Since      int64        `json:"since,omitempty"`     // unix seconds the current non-ok state began (0 when ok)
 	Days       []DayBucket `json:"days"`                // 30 entries, oldest first
 	LastCheck  int64       `json:"last_check"`          // unix seconds
 	ProbeViews []ProbeView `json:"probe_views"`         // per-probe latest status

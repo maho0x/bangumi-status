@@ -336,25 +336,16 @@
     return h === 0 ? t("dur_d", d) : t("dur_dh", d, h);
   };
 
-  // When did the current outage start? Returns the earliest start_ts among the
-  // currently-affected non-guest components, taking each component's most recent
-  // incident as the one in progress. Returns null if none is affected.
-  //
-  // Note: the live component `status` and the `incidents` list come from
-  // different caches — status is live, incidents refresh only every few minutes,
-  // so an ongoing incident's end_ts lags well behind `now`. We must NOT gate on
-  // end_ts freshness; the live status already tells us the component is affected,
-  // and the latest incident's start is the best estimate of when it began.
+  // When did the current outage start? Returns the earliest `since` among the
+  // currently-affected non-guest components, or null if none is affected. The
+  // backend stamps `since` from the same live status signal it reports, so the
+  // duration always lines up with the banner state — no incident-list stitching.
   function outageStartedAt(overall) {
     const nonGuest = (overall.components || []).filter(c => c.kind !== "guest");
     let start = null;
     for (const c of nonGuest) {
-      if (c.status === "ok") continue;
-      let latest = null;
-      for (const inc of (c.incidents || [])) {
-        if (latest == null || inc.end_ts > latest.end_ts) latest = inc;
-      }
-      if (latest && (start == null || latest.start_ts < start)) start = latest.start_ts;
+      if (c.status === "ok" || !c.since) continue;
+      if (start == null || c.since < start) start = c.since;
     }
     return start;
   }
