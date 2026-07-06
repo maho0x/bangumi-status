@@ -396,7 +396,12 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "public, max-age=20")
+	// no-cache (not no-store): shared/edge caches may keep a copy but must
+	// revalidate against the origin every time, so a pull never serves a stale
+	// snapshot. The origin answers from the in-memory cache (getOverall), so this
+	// adds no DB/compute load. SSE (/api/status/stream) is the live channel;
+	// this keeps page reloads and the 30s poll fallback tracking near-real-time.
+	w.Header().Set("Cache-Control", "no-cache")
 	_ = json.NewEncoder(w).Encode(overall)
 }
 
