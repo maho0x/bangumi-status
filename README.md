@@ -1,8 +1,8 @@
 # Bangumi Status
 
-独立的 Bangumi 可用性监控系统，从多个地区的探针节点并发检测 bgm.tv、bangumi.tv、chii.in 及 Bangumi API 的可用状态，聚合结果后展示在状态页面并通过 Telegram 推送告警。
+独立的 Bangumi 可用性监控系统，从多个地区的探针节点并发检测 bgm.tv、bangumi.tv 及 Bangumi API 的可用状态，聚合结果后展示在状态页面并通过 Telegram 推送告警。
 
-An independent availability monitor for [Bangumi](https://bgm.tv), probing bgm.tv, bangumi.tv, chii.in, next.bgm.tv/p1, and api.bgm.tv from multiple geographic regions.
+An independent availability monitor for [Bangumi](https://bgm.tv), probing bgm.tv, bangumi.tv, next.bgm.tv/p1, and api.bgm.tv from multiple geographic regions.
 
 ---
 

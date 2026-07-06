@@ -191,7 +191,7 @@ func (r *Runner) run(ctx context.Context, site string, kind types.Kind) (types.R
 
 	// Piggy-back the site-wide "online: N" counter off the authenticated
 	// bangumi.tv homepage (it only renders for signed-in users, and the cookie
-	// domain is .bangumi.tv so bgm.tv/chii.in responses don't carry it).
+	// domain is .bangumi.tv so bgm.tv responses don't carry it).
 	online := 0
 	if site == "bangumi.tv" && kind == types.KindAuth && resp.StatusCode == 200 {
 		if m := onlineRe.FindSubmatch(body); m != nil {

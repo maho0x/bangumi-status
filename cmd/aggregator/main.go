@@ -328,21 +328,14 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		if !res.Valid() {
 			continue
 		}
+		// Ignore stale reports from old probe binaries or unconfigured targets.
+		// Historical rows already stored for removed components are left intact.
+		if !types.IsMonitoredComponent(res.Domain, res.Kind) {
+			continue
+		}
 		// marker missing means the probe's cookie is invalid, not a service fault.
 		if res.Kind == types.KindAuth && res.Err == "marker missing" {
 			continue
-		}
-		// chii.in sits behind a Cloudflare managed challenge (since ~2026-07):
-		// naked HTTP probes can't solve the JS/managed challenge and get a 403
-		// challenge page. A 403 on chii.in means the Cloudflare edge is up and
-		// serving — real browser users get through — so it's not a service
-		// fault. Genuine origin outages still surface as 5xx (Cloudflare 52x),
-		// which this leaves untouched. Normalize the challenge 403 to OK so it
-		// stops false-escalating via quorum and paging Telegram. Remove this
-		// once chii.in drops the challenge.
-		if res.Domain == "chii.in" && res.HTTPCode == 403 && res.Status != types.StatusOK {
-			res.Status = types.StatusOK
-			res.Err = "cf-challenge"
 		}
 		kept = append(kept, res)
 	}
@@ -430,7 +423,7 @@ func (s *server) handleMini(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, c := range components {
 		switch c.Domain {
-		case "bgm.tv", "bangumi.tv", "chii.in":
+		case "bgm.tv", "bangumi.tv":
 			if worseThan(c.Status, worstStatus) {
 				worstStatus = c.Status
 			}
@@ -608,6 +601,7 @@ func (s *server) loadStatusCache() {
 		log.Printf("status cache load: %v", err)
 		return
 	}
+	pruneInactiveComponents(&cached)
 	s.mu.Lock()
 	s.cached = &cached
 	s.cachedAt = time.Now().Add(-31 * time.Second)
@@ -624,6 +618,26 @@ func (s *server) loadStatusCache() {
 	s.outageMu.Unlock()
 	s.notifier.UpdateSummary(&cached)
 	log.Printf("loaded status cache from %s", s.statusCachePath)
+}
+
+func pruneInactiveComponents(overall *types.Overall) {
+	if overall == nil {
+		return
+	}
+	components := overall.Components[:0]
+	worstStatus := types.StatusOK
+	for _, c := range overall.Components {
+		if !types.IsMonitoredComponent(c.Domain, c.Kind) {
+			continue
+		}
+		components = append(components, c)
+		if worseThan(c.Status, worstStatus) {
+			worstStatus = c.Status
+		}
+	}
+	overall.Components = components
+	overall.Status = worstStatus
+	overall.Message = messageFor(worstStatus)
 }
 
 func (s *server) saveStatusCache(overall *types.Overall) {
@@ -1683,7 +1697,7 @@ func (s *server) dailyReportLoop(ctx context.Context) {
 		end := start.Add(24 * time.Hour)
 
 		var items []notifier.DailyReportItem
-		for _, domain := range []string{"bgm.tv", "bangumi.tv", "chii.in"} {
+		for _, domain := range []string{"bgm.tv", "bangumi.tv"} {
 			bucket, err := s.store.DaySummary(ctx, domain, types.KindAuth, start, end)
 			if err != nil {
 				log.Printf("daily report: summary error for %s: %v", domain, err)

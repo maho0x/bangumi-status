@@ -27,7 +27,6 @@ type SiteConfig struct {
 var SiteConfigs = []SiteConfig{
 	{"bgm.tv", []Kind{KindGuest, KindAuth}},
 	{"bangumi.tv", []Kind{KindGuest, KindAuth}},
-	{"chii.in", []Kind{KindGuest, KindAuth}},
 	{"next.bgm.tv/p1", []Kind{KindGuest, KindAuth}},
 	{"api.bgm.tv", []Kind{KindGuest, KindAuth}},
 }
@@ -43,6 +42,22 @@ var Sites = func() []string {
 
 // Kinds is the union of all kinds across sites (kept for compatibility).
 var Kinds = []Kind{KindGuest, KindAuth}
+
+// IsMonitoredComponent reports whether a reported result belongs to the active
+// target set.
+func IsMonitoredComponent(domain string, kind Kind) bool {
+	for _, sc := range SiteConfigs {
+		if sc.Domain != domain {
+			continue
+		}
+		for _, k := range sc.Kinds {
+			if k == kind {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // Result is one probe observation.
 type Result struct {
@@ -161,7 +176,7 @@ type ComponentStatus struct {
 	Label      string      `json:"label"`
 	Status     Status      `json:"status"`              // current rolled-up status
 	Uptime     float64     `json:"uptime"`              // 0-100
-	Since      int64        `json:"since,omitempty"`     // unix seconds the current non-ok state began (0 when ok)
+	Since      int64       `json:"since,omitempty"`     // unix seconds the current non-ok state began (0 when ok)
 	Days       []DayBucket `json:"days"`                // 30 entries, oldest first
 	LastCheck  int64       `json:"last_check"`          // unix seconds
 	ProbeViews []ProbeView `json:"probe_views"`         // per-probe latest status

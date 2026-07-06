@@ -53,8 +53,6 @@
       section_current: "Current status by service", hint_30d: "30-day uptime",
       legend_ok: "Operational", legend_degraded: "Degraded",
       legend_down: "Outage", legend_none: "No data",
-      chii_cf_label: "About chii.in",
-      chii_cf_note: "chii.in is behind a Cloudflare human-verification challenge, so its status here is not reliable for reference.",
 
       section_unresolved: "Unresolved incidents",
       section_past: "Past incidents", hint_past: "Last 10 days",
@@ -74,7 +72,7 @@
       ago_label: (rel) => rel,
       footer_desc: "Independent, community-run availability monitor. Not affiliated with Bangumi.",
       modal_title: "Subscribe to updates",
-      modal_intro: "Get notified when bgm.tv, bangumi.tv, chii.in or the Bangumi API experiences availability issues.",
+      modal_intro: "Get notified when bgm.tv, bangumi.tv or the Bangumi API experiences availability issues.",
       sub_atom_title: "Atom / RSS feed",
       sub_atom_desc: "Add this feed to any RSS reader for incident notifications.",
       sub_tg_title: "Telegram channel",
@@ -138,8 +136,6 @@
       section_current: "当前服务状态", hint_30d: "30天可用率",
       legend_ok: "正常", legend_degraded: "降级",
       legend_down: "中断", legend_none: "无数据",
-      chii_cf_label: "关于 chii.in",
-      chii_cf_note: "chii.in 已启用 Cloudflare 人机验证，此处状态不可用于参考。",
 
       section_unresolved: "未解决的事故",
       section_past: "历史事故", hint_past: "最近10天",
@@ -159,7 +155,7 @@
       ago_label: (rel) => rel,
       footer_desc: "社区运营的Bangumi可用性监测。",
       modal_title: "订阅更新",
-      modal_intro: "当 bgm.tv、bangumi.tv、chii.in 或 Bangumi API 出现可用性问题时获得通知。",
+      modal_intro: "当 bgm.tv、bangumi.tv 或 Bangumi API 出现可用性问题时获得通知。",
       sub_atom_title: "Atom / RSS 订阅",
       sub_atom_desc: "将此订阅源添加到任何 RSS 阅读器以获取故障通知。",
       sub_tg_title: "Telegram 频道",
@@ -996,9 +992,9 @@
   }
 
   function renderOnlineChart(overall) {
-    // Incident overlays from the three main sites (auth kind) — useful on both
+    // Incident overlays from the main web sites (auth kind) — useful on both
     // metrics (shows whether a traffic spike lines up with an outage).
-    const mainDomains = new Set(["bgm.tv", "bangumi.tv", "chii.in"]);
+    const mainDomains = new Set(["bgm.tv", "bangumi.tv"]);
     onlineIncidents = [];
     for (const c of (overall.components || [])) {
       if (!mainDomains.has(c.domain) || c.kind !== "auth") continue;
@@ -1214,7 +1210,7 @@
     for (const c of overall.components || []) {
       (byDomain[c.domain] = byDomain[c.domain] || []).push(c);
     }
-    const orderedDomains = ["bgm.tv", "bangumi.tv", "chii.in", "next.bgm.tv", "next.bgm.tv/p1", "api.bgm.tv"]
+    const orderedDomains = ["bgm.tv", "bangumi.tv", "next.bgm.tv", "next.bgm.tv/p1", "api.bgm.tv"]
       .filter(d => (byDomain[d] || []).length > 0);
     const groupsData = orderedDomains.map(domain => ({ domain, comps: byDomain[domain] }));
 
@@ -1234,25 +1230,6 @@
     const domainDot = el("span", { class: "status-dot" });
     const hdrRight = el("div", { class: "group-hdr-right" });
     const nameSpan = el("span", { class: "domain-name" }, [domainDot, document.createTextNode(g.domain)]);
-    // chii.in sits behind a Cloudflare challenge: a small ⓘ explains that a
-    // verification block is not a service outage, so users don't misread it.
-    if (g.domain === "chii.in") {
-      const info = el("button", {
-        type: "button",
-        class: "cf-info",
-        "aria-label": t("chii_cf_label"),
-        onmouseenter: (e) => showTip(e, t("chii_cf_note")),
-        onmouseleave: hideTip,
-        onfocus: (e) => showTip(e, t("chii_cf_note")),
-        onblur: hideTip,
-        // Touch fires mouseenter (show) then click on one tap; toggling here
-        // would hide it and force a second tap. Always show — tapping away
-        // fires mouseleave (mobile) / pointer-leave (desktop) to dismiss.
-        onclick: (e) => { e.stopPropagation(); showTip(e, t("chii_cf_note")); },
-      }, "ⓘ");
-      nameSpan.appendChild(info);
-      groupEl._cfInfo = info;
-    }
     const hdr = el("div", { class: "group-hdr" }, [nameSpan, hdrRight]);
     groupEl.appendChild(hdr);
     groupEl._domainDot = domainDot;
@@ -1303,8 +1280,6 @@
       const shown = groupEl.classList.contains("show-guest");
       setText(groupEl._toggleLabel, shown ? t("guest_hide") : t("guest_show"));
     }
-    if (groupEl._cfInfo) groupEl._cfInfo.setAttribute("aria-label", t("chii_cf_label"));
-
     reconcileComponentRows(groupEl, g.comps);
   }
 

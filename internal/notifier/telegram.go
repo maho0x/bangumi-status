@@ -311,7 +311,6 @@ func renderRecoveryText(rg *recoveryGroup) string {
 		fmtBeijingMoment(rg.StartedAt, rg.RecoveredAt), fmtBeijingMoment(rg.RecoveredAt, rg.StartedAt), strings.Join(rg.Domains, "、"), fmtApproxDuration(rg.MaxDur))
 }
 
-
 // handleOutage either edits the active group's message (if still within the
 // merge window) or opens a new group with a fresh Telegram message.
 func (t *Telegram) handleOutage(c types.ComponentStatus, separateFromDegraded bool) {
@@ -616,7 +615,7 @@ type DailyReportItem struct {
 }
 
 // SendDailyReport pushes a once-a-day summary to Telegram.
-// Items are expected to be the three main sites (bgm.tv, bangumi.tv, chii.in).
+// Items are expected to be the main web sites (bgm.tv, bangumi.tv).
 func (t *Telegram) SendDailyReport(date string, items []DailyReportItem) {
 	if !t.Enabled() || len(items) == 0 {
 		return
@@ -631,7 +630,7 @@ func (t *Telegram) SendDailyReport(date string, items []DailyReportItem) {
 	var b strings.Builder
 	if !hasIssue {
 		fmt.Fprintf(&b, "🎉 班固米昨天没炸！ (%s) 🎉\n", date)
-		fmt.Fprintf(&b, "太棒了！班固米 (bangumi.tv, bgm.tv, chii.in) 在昨天服务一切正常，いちご100%%！\n")
+		fmt.Fprintf(&b, "太棒了！班固米 (bangumi.tv, bgm.tv) 在昨天服务一切正常，いちご100%%！\n")
 	} else {
 		fmt.Fprintf(&b, "💥 班固米昨天炸了！ (%s) 💥\n", date)
 		for _, it := range items {
@@ -715,14 +714,14 @@ func formatSummary(overall *types.Overall) string {
 	rank := map[types.Status]int{types.StatusOK: 0, types.StatusDegraded: 1, types.StatusDown: 2}
 
 	// Aggregate per-domain: worst status.
-	// For the three main sites, uptime is the authenticated endpoint only;
+	// For the main web sites, uptime is the authenticated endpoint only;
 	// for others (next/api) it is the worst across monitored kinds.
 	type domainInfo struct {
 		status types.Status
 		uptime float64
 	}
 	domains := map[string]*domainInfo{}
-	order := []string{"bgm.tv", "bangumi.tv", "chii.in", "next.bgm.tv", "api.bgm.tv"}
+	order := []string{"bgm.tv", "bangumi.tv", "next.bgm.tv", "api.bgm.tv"}
 	for _, d := range order {
 		domains[d] = &domainInfo{status: types.StatusOK, uptime: 100}
 	}
