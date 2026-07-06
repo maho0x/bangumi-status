@@ -613,6 +613,22 @@ body[data-page="wiki"] .container {
   letter-spacing: 0.09em;
   font-weight: 500;
 }
+.cf-info {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 0;
+  margin-left: -2px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-faint);
+  cursor: help;
+  transition: color 0.15s ease;
+}
+.cf-info:hover,
+.cf-info:focus-visible { color: var(--accent, var(--text-dim)); }
+.cf-info:focus-visible { outline: 1px solid var(--border-strong); outline-offset: 2px; border-radius: 3px; }
 
 .group-hdr-right { display: inline-flex; align-items: center; gap: 10px; }
 

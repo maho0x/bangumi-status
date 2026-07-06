@@ -53,6 +53,8 @@
       section_current: "Current status by service", hint_30d: "30-day uptime",
       legend_ok: "Operational", legend_degraded: "Degraded",
       legend_down: "Outage", legend_none: "No data",
+      chii_cf_label: "About chii.in",
+      chii_cf_note: "chii.in is behind a Cloudflare human-verification challenge, so its status here is not reliable for reference.",
 
       section_unresolved: "Unresolved incidents",
       section_past: "Past incidents", hint_past: "Last 10 days",
@@ -136,6 +138,8 @@
       section_current: "当前服务状态", hint_30d: "30天可用率",
       legend_ok: "正常", legend_degraded: "降级",
       legend_down: "中断", legend_none: "无数据",
+      chii_cf_label: "关于 chii.in",
+      chii_cf_note: "chii.in 已启用 Cloudflare 人机验证，此处状态不可用于参考。",
 
       section_unresolved: "未解决的事故",
       section_past: "历史事故", hint_past: "最近10天",
@@ -744,6 +748,16 @@
     const high = pts.map(p => banded ? (p.peak || p.count) : p.count);
     const peakIdx = high.reduce((bi, v, i) => (v > high[bi] ? i : bi), 0);
     const nowTs = Math.floor(Date.now() / 1000);
+    // The series stores only transitions, so the last DB point can be minutes
+    // old. Carry its value forward to "now" so the (stepped) line reaches the
+    // right edge instead of stopping at the last change. peakIdx/vMax are
+    // computed off the real points above, so the synthetic edge never wins.
+    if (xs.length && xs[xs.length - 1] < nowTs) {
+      xs.push(nowTs);
+      avg.push(avg[avg.length - 1]);
+      low.push(low[low.length - 1]);
+      high.push(high[high.length - 1]);
+    }
     const incidents = (onlineIncidents || []).filter(
       inc => (inc.end_ts || nowTs) > xs[0] && inc.start_ts < xs[xs.length - 1]);
 
@@ -875,6 +889,10 @@
     const series = [
       {},
       { stroke: ok, width: 1.6, points: { show: false },
+        // The online counter is a step function (a value held until the next
+        // transition), so draw it stepped rather than interpolating diagonals
+        // between sparse change points.
+        paths: uPlot.paths.stepped({ align: 1 }),
         // Area fill only on the raw 24h view; bucketed views use the band instead.
         fill: () => (onlineState && !onlineState.banded ? withAlpha(ok, 0.20) : null) },
     ];
@@ -1215,10 +1233,27 @@
     });
     const domainDot = el("span", { class: "status-dot" });
     const hdrRight = el("div", { class: "group-hdr-right" });
-    const hdr = el("div", { class: "group-hdr" }, [
-      el("span", { class: "domain-name" }, [domainDot, document.createTextNode(g.domain)]),
-      hdrRight,
-    ]);
+    const nameSpan = el("span", { class: "domain-name" }, [domainDot, document.createTextNode(g.domain)]);
+    // chii.in sits behind a Cloudflare challenge: a small ⓘ explains that a
+    // verification block is not a service outage, so users don't misread it.
+    if (g.domain === "chii.in") {
+      const info = el("button", {
+        type: "button",
+        class: "cf-info",
+        "aria-label": t("chii_cf_label"),
+        onmouseenter: (e) => showTip(e, t("chii_cf_note")),
+        onmouseleave: hideTip,
+        onfocus: (e) => showTip(e, t("chii_cf_note")),
+        onblur: hideTip,
+        // Touch fires mouseenter (show) then click on one tap; toggling here
+        // would hide it and force a second tap. Always show — tapping away
+        // fires mouseleave (mobile) / pointer-leave (desktop) to dismiss.
+        onclick: (e) => { e.stopPropagation(); showTip(e, t("chii_cf_note")); },
+      }, "ⓘ");
+      nameSpan.appendChild(info);
+      groupEl._cfInfo = info;
+    }
+    const hdr = el("div", { class: "group-hdr" }, [nameSpan, hdrRight]);
     groupEl.appendChild(hdr);
     groupEl._domainDot = domainDot;
     groupEl._hdrRight = hdrRight;
@@ -1268,6 +1303,7 @@
       const shown = groupEl.classList.contains("show-guest");
       setText(groupEl._toggleLabel, shown ? t("guest_hide") : t("guest_show"));
     }
+    if (groupEl._cfInfo) groupEl._cfInfo.setAttribute("aria-label", t("chii_cf_label"));
 
     reconcileComponentRows(groupEl, g.comps);
   }

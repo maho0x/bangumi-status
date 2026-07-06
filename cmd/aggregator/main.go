@@ -43,14 +43,16 @@ type server struct {
 	// Anything reported under this token must have a probe-id that
 	// HasPrefix(prefix). The operator can self-pick probe-ids inside their
 	// namespace without contacting the maintainer.
-	tokenPrefixes map[string]string
-	// onlineSourceProbe is the canonical probe whose OnlineCount samples are
-	// recorded. Multiple probes scrape bangumi.tv at different offsets and see
-	// slightly different values; trusting one source avoids systematic bias.
-	onlineSourceProbe string
-	wikiStatsURL      string
-	statusCachePath   string
-	notifier          *notifier.Telegram
+	tokenPrefixes   map[string]string
+	wikiStatsURL    string
+	statusCachePath string
+	notifier        *notifier.Telegram
+
+	// onlineMu guards lastOnline, the most recent online count persisted. Every
+	// probe feeds the online series, but we write a row only when the value
+	// changes, so the chart holds each value until the next transition.
+	onlineMu   sync.Mutex
+	lastOnline int
 
 	mu       sync.RWMutex
 	cached   *types.Overall
@@ -187,12 +189,6 @@ func main() {
 		log.Printf("telegram notifications enabled")
 	}
 
-	onlineSourceProbe := os.Getenv("ONLINE_SOURCE_PROBE")
-	if onlineSourceProbe == "" {
-		onlineSourceProbe = "wataame-tokyo-1"
-	}
-	log.Printf("online counter source: %s", onlineSourceProbe)
-
 	wikiStatsURL := os.Getenv("WIKI_STATS_URL")
 	if wikiStatsURL == "" {
 		wikiStatsURL = "https://chii.in/wiki/stats"
@@ -205,7 +201,10 @@ func main() {
 	}
 
 	statusCachePath := stringFromEnv("STATUS_CACHE_PATH", "/var/lib/bangumi-status/status-cache.json")
-	s := &server{store: st, secret: secret, tokenPrefixes: tokenPrefixes, onlineSourceProbe: onlineSourceProbe, wikiStatsURL: wikiStatsURL, statusCachePath: statusCachePath, notifier: tg, rxHub: newReactionHub(), statusHub: newReactionHub(), refreshCh: make(chan struct{}, 1), outageSince: map[store.ComponentKey]int64{}}
+	s := &server{store: st, secret: secret, tokenPrefixes: tokenPrefixes, wikiStatsURL: wikiStatsURL, statusCachePath: statusCachePath, notifier: tg, rxHub: newReactionHub(), statusHub: newReactionHub(), refreshCh: make(chan struct{}, 1), outageSince: map[store.ComponentKey]int64{}}
+	if last, err := st.LatestOnline(context.Background()); err == nil {
+		s.lastOnline = last
+	}
 	s.loadStatusCache()
 
 	mux := http.NewServeMux()
@@ -333,6 +332,18 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		if res.Kind == types.KindAuth && res.Err == "marker missing" {
 			continue
 		}
+		// chii.in sits behind a Cloudflare managed challenge (since ~2026-07):
+		// naked HTTP probes can't solve the JS/managed challenge and get a 403
+		// challenge page. A 403 on chii.in means the Cloudflare edge is up and
+		// serving — real browser users get through — so it's not a service
+		// fault. Genuine origin outages still surface as 5xx (Cloudflare 52x),
+		// which this leaves untouched. Normalize the challenge 403 to OK so it
+		// stops false-escalating via quorum and paging Telegram. Remove this
+		// once chii.in drops the challenge.
+		if res.Domain == "chii.in" && res.HTTPCode == 403 && res.Status != types.StatusOK {
+			res.Status = types.StatusOK
+			res.Err = "cf-challenge"
+		}
 		kept = append(kept, res)
 	}
 	if err := s.store.Insert(r.Context(), kept); err != nil {
@@ -345,9 +356,25 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		if ts == 0 {
 			ts = time.Now().Unix()
 		}
-		// Accept any probe's reading. The store keeps canonical samples when
-		// available and uses non-canonical ones as outage-time fallback.
-		_ = s.store.InsertOnline(r.Context(), ts, p.OnlineCount, p.Probe == s.onlineSourceProbe)
+		// Every probe feeds the online series, but we persist a row only when the
+		// value changes. bangumi.tv's site-wide counter is cached ~10 min, so
+		// storing every tick just writes duplicates; recording transitions sheds
+		// ~10× redundancy. The chart carries the last value forward between points.
+		//
+		// We record faithfully here — including the ~2× cache-rebuild spikes —
+		// and filter those at read time (see OnlineSeriesBucketed's spike filter),
+		// where both neighbours are visible. A read-time both-sided test is robust
+		// against the daily ramp/oscillation; an ingest-time forward test is not
+		// (its baseline sticks after a spike and then over-rejects normal swings).
+		s.onlineMu.Lock()
+		changed := p.OnlineCount != s.lastOnline
+		if changed {
+			s.lastOnline = p.OnlineCount
+		}
+		s.onlineMu.Unlock()
+		if changed {
+			_ = s.store.InsertOnline(r.Context(), ts, p.OnlineCount)
+		}
 	}
 
 	// Nudge the refresh loop so a status change reaches connected clients (via

@@ -81,11 +81,10 @@ CREATE TABLE IF NOT EXISTS online_counts (
   ts_min BIGINT PRIMARY KEY,
   count  INTEGER NOT NULL
 );
--- is_canonical: TRUE if the sample came from ONLINE_SOURCE_PROBE. Non-canonical
--- samples are used as fallback coverage when the canonical probe can't reach
--- bangumi.tv (e.g. during an outage); canonical samples take precedence.
--- Existing rows pre-date this column and were all written by the canonical
--- probe under the prior single-source rule, so default to TRUE.
+-- is_canonical: vestigial. It once flagged the canonical probe's samples for a
+-- preference rule that never actually engaged (the configured canonical probe
+-- was not deployed). The aggregator now records every probe's reading on value
+-- change and ignores this column. Kept (default TRUE) to avoid a migration.
 ALTER TABLE online_counts ADD COLUMN IF NOT EXISTS is_canonical BOOLEAN NOT NULL DEFAULT TRUE;
 
 -- traffic_samples: concurrent status-page viewers (active SSE subscribers),
@@ -224,27 +223,36 @@ func (s *Store) PurgeExpiredReactions(ctx context.Context) error {
 	return err
 }
 
-// InsertOnline records a bangumi.tv "online: N" sample. The key is the
-// minute-aligned unix timestamp so multiple probes reporting in the same
-// minute collapse to a single row.
-//
-// Conflict policy: canonical samples beat non-canonical samples; within the
-// same priority, first writer wins. This lets a non-canonical probe fill in
-// coverage when the canonical probe can't reach bangumi.tv, while still
-// preferring canonical readings (which avoid per-probe systematic offsets)
-// whenever they exist for that minute.
-func (s *Store) InsertOnline(ctx context.Context, ts int64, count int, isCanonical bool) error {
+// InsertOnline records a bangumi.tv "online: N" sample, keyed by the
+// minute-aligned unix timestamp. The aggregator only calls this when the value
+// actually changes — bangumi.tv's site-wide counter is server-cached for
+// ~10 min, so storing every tick just writes ~10 duplicate rows per plateau.
+// Recording only transitions makes each row a genuine step; the chart carries
+// the last value forward in between. The ON CONFLICT keeps the latest reading
+// if two changes happen to land in the same minute.
+func (s *Store) InsertOnline(ctx context.Context, ts int64, count int) error {
 	if ts <= 0 || count <= 0 {
 		return nil
 	}
 	tsMin := ts - (ts % 60)
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO online_counts (ts_min, count, is_canonical) VALUES ($1, $2, $3)
-		 ON CONFLICT (ts_min) DO UPDATE
-		    SET count = EXCLUDED.count, is_canonical = TRUE
-		  WHERE online_counts.is_canonical = FALSE AND EXCLUDED.is_canonical = TRUE`,
-		tsMin, count, isCanonical)
+		`INSERT INTO online_counts (ts_min, count) VALUES ($1, $2)
+		 ON CONFLICT (ts_min) DO UPDATE SET count = EXCLUDED.count`,
+		tsMin, count)
 	return err
+}
+
+// LatestOnline returns the most recent stored online count (0 if none). The
+// aggregator seeds its in-memory last value with this on startup so a restart
+// doesn't write a redundant transition for an unchanged counter.
+func (s *Store) LatestOnline(ctx context.Context) (int, error) {
+	var c int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT count FROM online_counts ORDER BY ts_min DESC LIMIT 1`).Scan(&c)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	return c, err
 }
 
 // OnlineSeries returns minute samples since `since`, oldest first.
@@ -254,8 +262,12 @@ func (s *Store) OnlineSeries(ctx context.Context, since time.Time) ([]types.Onli
 
 // OnlineSeriesBucketed returns bangumi.tv online-counter samples since `since`,
 // grouped into buckets of `bucketSecs` seconds (0 = raw minute resolution).
+// Spike filtering is on: cache-rebuild artifacts (a point > 1.5× BOTH its
+// neighbours) are dropped at read time so they never reach the chart. We filter
+// here rather than at ingest so no data is lost and the both-sided test stays
+// robust against the daily ramp (a ramp point is never above both neighbours).
 func (s *Store) OnlineSeriesBucketed(ctx context.Context, since time.Time, bucketSecs int64) ([]types.OnlinePoint, error) {
-	return s.bucketedSeries(ctx, "online_counts", "count", since, bucketSecs)
+	return s.bucketedSeries(ctx, "online_counts", "count", since, bucketSecs, true)
 }
 
 // InsertTrafficSample records the number of concurrent status-page viewers at
@@ -276,7 +288,7 @@ func (s *Store) InsertTrafficSample(ctx context.Context, ts int64, viewers int) 
 // TrafficSeriesBucketed mirrors OnlineSeriesBucketed for the status-page viewer
 // series.
 func (s *Store) TrafficSeriesBucketed(ctx context.Context, since time.Time, bucketSecs int64) ([]types.OnlinePoint, error) {
-	return s.bucketedSeries(ctx, "traffic_samples", "viewers", since, bucketSecs)
+	return s.bucketedSeries(ctx, "traffic_samples", "viewers", since, bucketSecs, false)
 }
 
 // bucketedSeries returns either raw minute samples (bucketSecs<=0) or per-bucket
@@ -287,10 +299,28 @@ func (s *Store) TrafficSeriesBucketed(ctx context.Context, since time.Time, buck
 //
 // table and valueCol are internal constants (never user input), so interpolating
 // them into the SQL is safe.
-func (s *Store) bucketedSeries(ctx context.Context, table, valueCol string, since time.Time, bucketSecs int64) ([]types.OnlinePoint, error) {
+//
+// When spikeFilter is set, points greater than 1.5× BOTH temporal neighbours are
+// dropped before raw output / bucket aggregation — these are bangumi.tv's
+// cache-rebuild artifacts (≈ old+new ≈ 2× the real count). The both-sided test
+// only fires on isolated peaks, so genuine ramps and oscillation are untouched.
+func (s *Store) bucketedSeries(ctx context.Context, table, valueCol string, since time.Time, bucketSecs int64, spikeFilter bool) ([]types.OnlinePoint, error) {
+	// src is the (ts_min, valueCol) source: the raw table, or a subquery that
+	// removes local outliers (> 1.5× both neighbours) when spikeFilter is on.
+	src := table
+	if spikeFilter {
+		src = `(SELECT ts_min, ` + valueCol + ` FROM (
+		          SELECT ts_min, ` + valueCol + `,
+		                 LAG(` + valueCol + `)  OVER (ORDER BY ts_min) AS _p,
+		                 LEAD(` + valueCol + `) OVER (ORDER BY ts_min) AS _n
+		          FROM ` + table + ` WHERE ts_min >= $1) _z
+		        WHERE _p IS NULL OR _n IS NULL
+		           OR NOT (` + valueCol + `::numeric > _p * 1.5 AND ` + valueCol + `::numeric > _n * 1.5)) _f`
+	}
+
 	if bucketSecs <= 0 {
 		rows, err := s.db.QueryContext(ctx,
-			`SELECT ts_min, `+valueCol+` FROM `+table+` WHERE ts_min >= $1 ORDER BY ts_min ASC`,
+			`SELECT ts_min, `+valueCol+` FROM `+src+` WHERE ts_min >= $1 ORDER BY ts_min ASC`,
 			since.Unix())
 		if err != nil {
 			return nil, err
@@ -312,7 +342,7 @@ func (s *Store) bucketedSeries(ctx context.Context, table, valueCol string, sinc
 		        CAST(ROUND(AVG(`+valueCol+`)) AS INTEGER) AS avg_v,
 		        MIN(`+valueCol+`) AS low,
 		        MAX(`+valueCol+`) AS peak
-		 FROM `+table+` WHERE ts_min >= $1
+		 FROM `+src+` WHERE ts_min >= $1
 		 GROUP BY bucket ORDER BY bucket ASC`,
 		since.Unix(), bucketSecs)
 	if err != nil {
