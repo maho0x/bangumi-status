@@ -193,6 +193,25 @@ type Incident struct {
 	PeakTotal int    `json:"peak_total"` // active probes at peak
 }
 
+// HistoryIncident is an Incident annotated with the component it belongs to.
+// The standalone history page lists incidents across all components at once, so
+// unlike ComponentStatus.Incidents each entry has to name its own component.
+type HistoryIncident struct {
+	Incident
+	Domain string `json:"domain"`
+	Kind   Kind   `json:"kind"`
+	Label  string `json:"label"`
+}
+
+// IncidentHistory is the /api/incidents body: one page of archived incidents
+// plus the bounds the frontend needs to page further back.
+type IncidentHistory struct {
+	Incidents  []HistoryIncident `json:"incidents"` // newest first
+	From       int64             `json:"from"`      // window start (unix seconds, inclusive)
+	To         int64             `json:"to"`        // window end (unix seconds, exclusive)
+	EarliestTS int64             `json:"earliest_ts,omitempty"`
+}
+
 type ProbeView struct {
 	Probe    string `json:"probe"`
 	Region   string `json:"region"`

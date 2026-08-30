@@ -23,6 +23,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -85,13 +86,32 @@ type server struct {
 	feedMu    sync.Mutex
 	feedCache cachedAtomFeed
 
+	// incidentHistory caches /api/incidents responses per month window. The
+	// archive only changes when a walk lands (every historyRefreshInterval),
+	// so a short TTL is plenty and keeps deep-paging cheap.
+	histCacheMu sync.Mutex
+	histCache   map[string]cachedIncidentHistory
+
 	reactionMu       sync.RWMutex
 	reactionCounts   []store.ReactionCount
 	reactionCountsAt time.Time
 	reactionSF       singleflight.Group
 
-	rxHub     *reactionHub
-	statusHub *reactionHub
+	rxHub      *reactionHub
+	statusHub  *reactionHub
+	trafficHub *reactionHub
+
+	// trafficPeak accumulates the per-minute peak viewer count. See its type.
+	trafficPeak trafficPeak
+}
+
+// cstZone is the project's reporting calendar: daily buckets, the daily
+// Telegram report and the history page's month boundaries all use UTC+8.
+var cstZone = time.FixedZone("CST", 8*60*60)
+
+type cachedIncidentHistory struct {
+	body     []byte
+	cachedAt time.Time
 }
 
 type cachedAtomFeed struct {
@@ -148,6 +168,36 @@ func (h *reactionHub) count() int {
 	return len(h.subs)
 }
 
+// trafficPeak accumulates the highest concurrent viewer count seen inside one
+// minute bucket. Viewers open and close the page between samples, so an
+// instantaneous once-a-minute snapshot systematically undercounts: a visitor
+// who reads the page for 20s between two ticks never appears at all. The peak
+// is the honest "how many people had this page open during that minute".
+type trafficPeak struct {
+	mu     sync.Mutex
+	bucket int64
+	peak   int
+}
+
+// observe folds n into the current minute's peak and returns the bucket that
+// needs persisting, or ok=false when n changes nothing (the minute's peak is
+// already at least n). Because the peak only ever grows within a bucket, calls
+// arriving slightly out of order are harmless.
+func (p *trafficPeak) observe(now time.Time, n int) (tsMin int64, peak int, ok bool) {
+	b := now.Unix() - now.Unix()%60
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if b != p.bucket {
+		p.bucket, p.peak = b, n
+		return b, n, true
+	}
+	if n <= p.peak {
+		return 0, 0, false
+	}
+	p.peak = n
+	return b, n, true
+}
+
 func main() {
 	addr := flag.String("addr", ":8080", "listen address")
 	dbDSN := flag.String("db-dsn", os.Getenv("DB_DSN"), "database DSN (postgres://...)")
@@ -201,7 +251,7 @@ func main() {
 	}
 
 	statusCachePath := stringFromEnv("STATUS_CACHE_PATH", "/var/lib/bangumi-status/status-cache.json")
-	s := &server{store: st, secret: secret, tokenPrefixes: tokenPrefixes, wikiStatsURL: wikiStatsURL, statusCachePath: statusCachePath, notifier: tg, rxHub: newReactionHub(), statusHub: newReactionHub(), refreshCh: make(chan struct{}, 1), outageSince: map[store.ComponentKey]int64{}}
+	s := &server{store: st, secret: secret, tokenPrefixes: tokenPrefixes, wikiStatsURL: wikiStatsURL, statusCachePath: statusCachePath, notifier: tg, rxHub: newReactionHub(), statusHub: newReactionHub(), trafficHub: newReactionHub(), refreshCh: make(chan struct{}, 1), outageSince: map[store.ComponentKey]int64{}, histCache: map[string]cachedIncidentHistory{}}
 	if last, err := st.LatestOnline(context.Background()); err == nil {
 		s.lastOnline = last
 	}
@@ -213,10 +263,12 @@ func main() {
 	mux.HandleFunc("GET /api/mini", s.handleMini)
 	mux.HandleFunc("GET /api/online", s.handleOnline)
 	mux.HandleFunc("GET /api/traffic", s.handleTraffic)
+	mux.HandleFunc("GET /api/traffic/stream", s.handleTrafficStream)
 	mux.HandleFunc("GET /api/wiki-stats", s.handleWikiStats)
 	mux.HandleFunc("GET /api/probes", s.handleProbes)
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /api/feed.atom", s.handleFeed)
+	mux.HandleFunc("GET /api/incidents", s.handleIncidents)
 	mux.HandleFunc("GET /api/reactions", s.handleReactionsList)
 	mux.HandleFunc("POST /api/reactions", s.handleReactionsToggle)
 	mux.HandleFunc("GET /api/reactions/stream", s.handleReactionsStream)
@@ -246,6 +298,7 @@ func main() {
 		log.Fatalf("ensure checks partitions: %v", err)
 	}
 
+	go s.backfillIncidents(ctx)
 	go s.retentionLoop(ctx)
 	go s.cacheRefreshLoop(ctx)
 	go s.trafficSampleLoop(ctx)
@@ -483,6 +536,62 @@ func (s *server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 	writeOnlinePoints(w, pts, err)
 }
 
+// handleTrafficStream pushes the live number of status-page viewers whenever
+// a status SSE connection opens or closes. Historical traffic remains sampled
+// once per minute; this tiny stream makes the "viewing now" value immediate
+// without increasing database write or query frequency.
+func (s *server) handleTrafficStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	flusher.Flush()
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+
+	ch, cleanup := s.trafficHub.subscribe()
+	defer cleanup()
+	send := func() bool {
+		buf, err := json.Marshal(map[string]any{
+			"viewers":    s.statusHub.count(),
+			"updated_at": time.Now().Unix(),
+		})
+		if err != nil {
+			return false
+		}
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", buf); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+	if !send() {
+		return
+	}
+
+	heartbeat := time.NewTicker(25 * time.Second)
+	defer heartbeat.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ch:
+			if !send() {
+				return
+			}
+		case <-heartbeat.C:
+			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
 func (s *server) handleWikiStats(w http.ResponseWriter, r *http.Request) {
 	points, scrapedAt, err := s.store.WikiStats(r.Context())
 	if err != nil {
@@ -692,6 +801,170 @@ func (s *server) setCachedFeed(base string, body []byte) {
 	}
 }
 
+const (
+	incidentBackfillKey  = "incidents_backfilled_v1"
+	incidentBackfillDays = 35 // matches retention: everything `checks` still holds
+	incidentHistoryTTL   = 5 * time.Minute
+	incidentMonthsMax    = 24
+)
+
+// backfillIncidents seeds the durable archive from whatever `checks` partitions
+// still exist the first time this version runs. Without it the archive would
+// start empty and silently forget the last month of outages that the raw data
+// can still account for. Runs once ever, guarded by a config key; walks
+// components serially so it never competes with ingest for the connection pool.
+func (s *server) backfillIncidents(ctx context.Context) {
+	if _, ok, err := s.store.GetConfig(ctx, incidentBackfillKey); err != nil {
+		log.Printf("incident backfill: read marker: %v", err)
+		return
+	} else if ok {
+		return
+	}
+	since := time.Now().AddDate(0, 0, -incidentBackfillDays)
+	total := 0
+	for _, c := range types.AllComponents() {
+		if ctx.Err() != nil {
+			return // shutting down; leave the marker unset so it retries next boot
+		}
+		incs, err := s.store.Incidents(ctx, c.Domain, c.Kind, since)
+		if err != nil {
+			log.Printf("incident backfill: walk %s/%s: %v", c.Domain, c.Kind, err)
+			return
+		}
+		if err := s.store.SyncIncidents(ctx, c.Domain, c.Kind, since.Unix(), incs); err != nil {
+			log.Printf("incident backfill: sync %s/%s: %v", c.Domain, c.Kind, err)
+			return
+		}
+		total += len(incs)
+	}
+	if err := s.store.SetConfig(ctx, incidentBackfillKey, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		log.Printf("incident backfill: write marker: %v", err)
+		return
+	}
+	log.Printf("incident backfill: archived %d incidents from the last %dd", total, incidentBackfillDays)
+}
+
+// defaultMonthWindow is the window used when a caller names no explicit bounds:
+// `months` whole CST months up to the end of the current one. CST is the
+// project's calendar everywhere else (daily buckets, the daily report), so a
+// bare `curl /api/incidents` reports on the same months the rest of the system
+// does. The status page itself always sends explicit bounds — see below.
+func defaultMonthWindow(months int) (int64, int64) {
+	now := time.Now().In(cstZone)
+	end := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, cstZone).AddDate(0, 1, 0)
+	return end.AddDate(0, -months, 0).Unix(), end.Unix()
+}
+
+// incidentWindow resolves the [from, to) the caller asked for.
+//
+// The page passes explicit unix bounds rather than a month name because it
+// groups incidents by the *viewer's* calendar (as the home page has always
+// done). If the server picked the months instead, its CST boundaries would land
+// mid-month for a viewer in another timezone and the page would render a
+// partial month as if it were a whole one — reporting "no incidents" for a
+// month whose incidents simply fell outside the window. Letting the client name
+// the bounds keeps the headers and the data in exact agreement.
+func incidentWindow(q url.Values) (int64, int64, error) {
+	fromRaw, toRaw := q.Get("from"), q.Get("to")
+	if fromRaw == "" && toRaw == "" {
+		months := 3
+		if v := q.Get("months"); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 {
+				return 0, 0, errors.New("bad months")
+			}
+			months = min(n, incidentMonthsMax)
+		}
+		from, to := defaultMonthWindow(months)
+		return from, to, nil
+	}
+	from, err := strconv.ParseInt(fromRaw, 10, 64)
+	if err != nil {
+		return 0, 0, errors.New("bad from")
+	}
+	to, err := strconv.ParseInt(toRaw, 10, 64)
+	if err != nil {
+		return 0, 0, errors.New("bad to")
+	}
+	if to <= from {
+		return 0, 0, errors.New("to must be after from")
+	}
+	// Bound the span so one request can never ask for an unbounded scan.
+	if to-from > int64(incidentMonthsMax)*31*86400 {
+		return 0, 0, errors.New("window too large")
+	}
+	return from, to, nil
+}
+
+// handleIncidents serves the archived incident history, one window at a time.
+// Unlike /api/status this is cold data, so it caches.
+func (s *server) handleIncidents(w http.ResponseWriter, r *http.Request) {
+	from, to, err := incidentWindow(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	key := fmt.Sprintf("%d|%d", from, to)
+	if body, ok := s.cachedIncidentHistory(key); ok {
+		writeIncidentHistory(w, body)
+		return
+	}
+
+	incidents, err := s.store.ListIncidents(r.Context(), from, to)
+	if err != nil {
+		log.Printf("list incidents: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	earliest, err := s.store.EarliestIncidentTS(r.Context())
+	if err != nil {
+		log.Printf("earliest incident: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	body, err := json.Marshal(types.IncidentHistory{
+		Incidents:  incidents,
+		From:       from,
+		To:         to,
+		EarliestTS: earliest,
+	})
+	if err != nil {
+		log.Printf("encode incidents: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	s.setCachedIncidentHistory(key, body)
+	writeIncidentHistory(w, body)
+}
+
+func writeIncidentHistory(w http.ResponseWriter, body []byte) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	_, _ = w.Write(body)
+}
+
+func (s *server) cachedIncidentHistory(key string) ([]byte, bool) {
+	s.histCacheMu.Lock()
+	defer s.histCacheMu.Unlock()
+	e, ok := s.histCache[key]
+	if !ok || time.Since(e.cachedAt) >= incidentHistoryTTL {
+		return nil, false
+	}
+	return e.body, true
+}
+
+func (s *server) setCachedIncidentHistory(key string, body []byte) {
+	s.histCacheMu.Lock()
+	defer s.histCacheMu.Unlock()
+	// Deep paging could otherwise grow this without bound; the window count is
+	// small and entries are cheap to rebuild, so just start over when it grows.
+	if len(s.histCache) > 64 {
+		s.histCache = map[string]cachedIncidentHistory{}
+	}
+	s.histCache[key] = cachedIncidentHistory{body: body, cachedAt: time.Now()}
+}
+
 func buildAtomFeed(base, host string, overall *types.Overall) ([]byte, error) {
 	entries := make([]atomEntry, 0)
 	for _, c := range overall.Components {
@@ -717,7 +990,7 @@ func buildAtomFeed(base, host string, overall *types.Overall) ([]byte, error) {
 			entries = append(entries, atomEntry{
 				ID:      id,
 				Title:   title,
-				Link:    atomLink{Href: base + "/", Rel: "alternate", Type: "text/html"},
+				Link:    atomLink{Href: base + "/history", Rel: "alternate", Type: "text/html"},
 				Updated: updated.Format(time.RFC3339),
 				Summary: atomText{Type: "text", Body: summary},
 				Content: atomText{Type: "text", Body: summary},
@@ -969,7 +1242,11 @@ func (s *server) handleStatusStream(w http.ResponseWriter, r *http.Request) {
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 
 	ch, cleanup := s.statusHub.subscribe()
-	defer cleanup()
+	s.trafficChanged()
+	defer func() {
+		cleanup()
+		s.trafficChanged()
+	}()
 
 	send := func() bool {
 		overall, err := s.getOverall(r.Context())
@@ -1290,6 +1567,12 @@ func (s *server) computeHistories(ctx context.Context) (map[store.ComponentKey]c
 				return err
 			}
 			store.OverlayIncidentsOnBuckets(buckets, incidents)
+			// Mirror the walk into the durable incidents table. This rides the
+			// walk we just paid for, and a failure must not fail the refresh:
+			// the status page matters more than the history archive.
+			if err := s.store.SyncIncidents(gctx, c.Domain, c.Kind, since.Unix(), incidents); err != nil {
+				log.Printf("sync incidents %s/%s: %v", c.Domain, c.Kind, err)
+			}
 			var totalOK, totalAll int
 			for _, b := range buckets {
 				totalAll += b.Total
@@ -1322,13 +1605,27 @@ func (s *server) computeRollups(ctx context.Context) ([]types.ComponentStatus, e
 	if err != nil {
 		return nil, err
 	}
+	now := time.Now().Unix()
+	s.outageMu.Lock()
+	defer s.outageMu.Unlock()
 	for i, c := range allComponents {
 		key := store.ComponentKey{Domain: c.Domain, Kind: c.Kind}
 		status, last := store.RollupStatus(viewsByComponent[key])
+		var since int64
+		if status != types.StatusOK {
+			since = s.outageSince[key]
+			if since == 0 {
+				since = now
+				s.outageSince[key] = since
+			}
+		} else {
+			delete(s.outageSince, key)
+		}
 		results[i] = types.ComponentStatus{
 			Domain:    c.Domain,
 			Kind:      c.Kind,
 			Status:    status,
+			Since:     since,
 			LastCheck: last,
 		}
 	}
@@ -1605,16 +1902,12 @@ func (s *server) requestRefresh() {
 // while collapsing bursts onto a single recompute.
 const refreshDebounce = 2 * time.Second
 
-// trafficSampleLoop records the number of concurrent status-page viewers
-// (active SSE subscribers) once per minute, on the minute. It's a proxy for
-// "how many people are checking the status page right now".
+// trafficSampleLoop keeps the per-minute viewer peak flowing even while nothing
+// connects or disconnects, so a minute with a steady audience still gets a row.
+// The interesting samples come from recordTrafficPeak on every SSE
+// connect/disconnect; this tick is the idle-minute floor.
 func (s *server) trafficSampleLoop(ctx context.Context) {
-	sample := func() {
-		if err := s.store.InsertTrafficSample(ctx, time.Now().Unix(), s.statusHub.count()); err != nil {
-			log.Printf("traffic sample: %v", err)
-		}
-	}
-	sample()
+	s.recordTrafficPeak(ctx)
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 	for {
@@ -1622,9 +1915,36 @@ func (s *server) trafficSampleLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			sample()
+			s.recordTrafficPeak(ctx)
 		}
 	}
+}
+
+// recordTrafficPeak folds the current viewer count into this minute's peak and
+// persists the bucket when it moves. Writes are bounded by the peak itself
+// (a bucket is written at most once per distinct new high), so hooking it to
+// every connect/disconnect costs at most a handful of upserts per minute.
+func (s *server) recordTrafficPeak(ctx context.Context) {
+	tsMin, peak, ok := s.trafficPeak.observe(time.Now(), s.statusHub.count())
+	if !ok {
+		return
+	}
+	if err := s.store.InsertTrafficSample(ctx, tsMin, peak); err != nil {
+		log.Printf("traffic sample: %v", err)
+	}
+}
+
+// trafficChanged fans the new viewer count out to the live /api/traffic/stream
+// subscribers and folds it into this minute's peak bucket. The DB write runs
+// detached from the triggering request: on disconnect the request context is
+// already cancelled, and the caller shouldn't wait on a write either way.
+func (s *server) trafficChanged() {
+	s.trafficHub.notify()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		s.recordTrafficPeak(ctx)
+	}()
 }
 
 func (s *server) cacheRefreshLoop(ctx context.Context) {
@@ -1683,7 +2003,7 @@ func (s *server) notifierLoop(ctx context.Context) {
 }
 
 func (s *server) dailyReportLoop(ctx context.Context) {
-	cst := time.FixedZone("CST", 8*60*60)
+	cst := cstZone
 
 	// Wait until next CST 00:00.
 	now := time.Now().In(cst)

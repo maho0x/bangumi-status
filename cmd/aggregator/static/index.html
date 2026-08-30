@@ -26,6 +26,7 @@
         <nav class="top-nav" aria-label="页面">
           <a href="/" data-route-link="status">状态</a>
           <a href="/stats" data-route-link="wiki">透视</a>
+          <a href="/history" data-route-link="history">历史</a>
         </nav>
         <button class="subscribe-btn" id="subscribe-btn" type="button" aria-haspopup="dialog" aria-controls="subscribe-modal">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1.4" fill="currentColor"/></svg>
@@ -114,6 +115,29 @@
       </div>
     </section>
 
+    <section id="history-page" class="history-page" aria-label="历史事故" hidden>
+      <header class="history-hero">
+        <div class="history-hero__text">
+          <h1>历史事故</h1>
+          <p>按月归档的可用性事故记录，从探针数据自动生成。</p>
+        </div>
+        <dl class="history-hero__meta">
+          <div>
+            <dt>记录起始</dt>
+            <dd class="num" id="history-earliest">—</dd>
+          </div>
+        </dl>
+      </header>
+
+      <div id="history-months" class="history-months"></div>
+      <div id="history-error" class="history-error" hidden>暂无数据。</div>
+
+      <div class="history-more">
+        <button type="button" id="history-more-btn" class="history-more__btn">加载更早</button>
+        <p class="history-more__end" id="history-end" hidden>已到最早记录。</p>
+      </div>
+    </section>
+
     <section id="unresolved-section" class="inc-section inc-section--unresolved" aria-label="未解决的事故" hidden>
       <header class="section-head">
         <h2>未解决的事故</h2>
@@ -166,6 +190,7 @@
         <h2>历史事故</h2>
         <div class="section-head__right">
           <span class="section-head__hint">最近10天</span>
+          <a href="/history" class="section-head__link" id="past-incidents-more">全部历史 →</a>
         </div>
       </header>
       <div id="past-incidents" class="inc-days"></div>

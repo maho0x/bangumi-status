@@ -122,6 +122,7 @@ INGEST_SECRET=... bash deploy/deploy-all.sh
 | `GET` | `/api/probes` | Registered probe list |
 | `GET` | `/api/health` | Store stats |
 | `GET` | `/api/feed.atom` | Atom feed (last 50 incidents) |
+| `GET` | `/api/incidents` | Archived incident history (`from`/`to` unix bounds, or `months`) |
 | `GET` | `/` | SPA frontend |
 
 ## 贡献探针节点 / Contributing a Probe Node

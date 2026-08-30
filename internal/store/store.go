@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -88,8 +89,9 @@ CREATE TABLE IF NOT EXISTS online_counts (
 ALTER TABLE online_counts ADD COLUMN IF NOT EXISTS is_canonical BOOLEAN NOT NULL DEFAULT TRUE;
 
 -- traffic_samples: concurrent status-page viewers (active SSE subscribers),
--- sampled once per minute. A proxy for "how many people are checking the
--- status page" — which itself spikes when bangumi.tv is down.
+-- one row per minute holding that minute's PEAK concurrency. A proxy for "how
+-- many people are checking the status page" — which itself spikes when
+-- bangumi.tv is down.
 CREATE TABLE IF NOT EXISTS traffic_samples (
   ts_min  BIGINT PRIMARY KEY,
   viewers INTEGER NOT NULL
@@ -144,6 +146,24 @@ CREATE TABLE IF NOT EXISTS wiki_stats_snapshots (
   chart_sets  JSONB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS wiki_stats_snapshots_scraped_at_idx ON wiki_stats_snapshots (scraped_at);
+
+-- incidents: the durable memory of past outages. Incident windows are derived
+-- from checks, but checks drops whole day partitions after ~35 days, so a
+-- derived-only history can never reach further back than retention. The
+-- aggregator mirrors every freshly walked window into this table (SyncIncidents)
+-- so /history keeps accumulating indefinitely. Small enough to never purge:
+-- a few hundred rows a year.
+CREATE TABLE IF NOT EXISTS incidents (
+  domain     TEXT   NOT NULL,
+  kind       TEXT   NOT NULL,
+  start_ts   BIGINT NOT NULL,
+  end_ts     BIGINT NOT NULL,
+  status     TEXT   NOT NULL,
+  peak_down  INTEGER NOT NULL DEFAULT 0,
+  peak_total INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (domain, kind, start_ts)
+);
+CREATE INDEX IF NOT EXISTS incidents_start_ts_idx ON incidents (start_ts DESC);
 `)
 	return err
 }
@@ -270,9 +290,11 @@ func (s *Store) OnlineSeriesBucketed(ctx context.Context, since time.Time, bucke
 	return s.bucketedSeries(ctx, "online_counts", "count", since, bucketSecs, true)
 }
 
-// InsertTrafficSample records the number of concurrent status-page viewers at
-// `ts`, one row per minute. Unlike the online counter, zero is a valid sample
-// (nobody watching), so it is not dropped.
+// InsertTrafficSample records concurrent status-page viewers at `ts`, one row
+// per minute. Re-inserting into a minute keeps the higher value, so repeated
+// calls within a minute accumulate that minute's peak concurrency. Unlike the
+// online counter, zero is a valid sample (nobody watching), so it is not
+// dropped.
 func (s *Store) InsertTrafficSample(ctx context.Context, ts int64, viewers int) error {
 	if ts <= 0 || viewers < 0 {
 		return nil
@@ -1015,6 +1037,142 @@ func incidentStatusRank(s types.Status) int {
 	default:
 		return 0
 	}
+}
+
+// SyncIncidents mirrors one component's freshly walked incident windows into
+// the durable `incidents` table, reconciling the whole [since, ∞) range in a
+// single transaction: windows are upserted (an ongoing outage keeps the same
+// start_ts while end_ts advances, so repeated syncs converge instead of piling
+// up rows) and any previously stored window inside the range that the walk no
+// longer produces is deleted. Callers pass the same `since` they walked with,
+// so anything older than that window is immutable and never touched.
+func (s *Store) SyncIncidents(ctx context.Context, domain string, kind types.Kind, since int64, incs []types.Incident) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, inc := range incs {
+		if inc.StartTS < since {
+			continue
+		}
+		// status: keep the more severe of stored vs incoming. The walk should
+		// only ever escalate, but a shrinking probe fleet could re-rollup a
+		// window as merely degraded — never let history get quieter.
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO incidents (domain, kind, start_ts, end_ts, status, peak_down, peak_total)
+VALUES ($1,$2,$3,$4,$5,$6,$7)
+ON CONFLICT (domain, kind, start_ts) DO UPDATE SET
+  end_ts     = GREATEST(incidents.end_ts, excluded.end_ts),
+  status     = CASE WHEN excluded.status = 'down' THEN 'down'
+                    WHEN incidents.status = 'down' THEN 'down'
+                    ELSE excluded.status END,
+  peak_down  = GREATEST(incidents.peak_down, excluded.peak_down),
+  peak_total = GREATEST(incidents.peak_total, excluded.peak_total)`,
+			domain, string(kind), inc.StartTS, inc.EndTS, string(inc.Status),
+			inc.PeakDown, inc.PeakTotal); err != nil {
+			return err
+		}
+	}
+
+	// Drop stored windows in range that this walk no longer produces.
+	args := []any{domain, string(kind), since}
+	del := `DELETE FROM incidents WHERE domain=$1 AND kind=$2 AND start_ts>=$3`
+	if len(incs) > 0 {
+		ph := make([]string, 0, len(incs))
+		for _, inc := range incs {
+			args = append(args, inc.StartTS)
+			ph = append(ph, fmt.Sprintf("$%d", len(args)))
+		}
+		del += " AND start_ts NOT IN (" + strings.Join(ph, ",") + ")"
+	}
+	if _, err := tx.ExecContext(ctx, del, args...); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ImportIncidents upserts windows derived from an archived database dump into
+// the durable table without the delete-missing reconciliation SyncIncidents
+// performs. A dump only ever covers a bounded slice of raw history, so a window
+// it cannot see must not be read as a window that no longer exists.
+//
+// Rows already present win on every field that can only grow (end_ts, peaks,
+// severity), which lets overlapping dumps be imported in any order: a window
+// truncated at one dump's boundary is extended by the dump that saw the rest of
+// it, as long as both walks agree on start_ts.
+func (s *Store) ImportIncidents(ctx context.Context, domain string, kind types.Kind, incs []types.Incident) (int, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	n := 0
+	for _, inc := range incs {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO incidents (domain, kind, start_ts, end_ts, status, peak_down, peak_total)
+VALUES ($1,$2,$3,$4,$5,$6,$7)
+ON CONFLICT (domain, kind, start_ts) DO UPDATE SET
+  end_ts     = GREATEST(incidents.end_ts, excluded.end_ts),
+  status     = CASE WHEN excluded.status = 'down' THEN 'down'
+                    WHEN incidents.status = 'down' THEN 'down'
+                    ELSE excluded.status END,
+  peak_down  = GREATEST(incidents.peak_down, excluded.peak_down),
+  peak_total = GREATEST(incidents.peak_total, excluded.peak_total)`,
+			domain, string(kind), inc.StartTS, inc.EndTS, string(inc.Status),
+			inc.PeakDown, inc.PeakTotal); err != nil {
+			return 0, err
+		}
+		n++
+	}
+	return n, tx.Commit()
+}
+
+// ListIncidents returns every stored incident window starting in [from, to),
+// newest first, across all components.
+func (s *Store) ListIncidents(ctx context.Context, from, to int64) ([]types.HistoryIncident, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT domain, kind, start_ts, end_ts, status, peak_down, peak_total
+FROM incidents
+WHERE start_ts >= $1 AND start_ts < $2
+ORDER BY start_ts DESC`, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []types.HistoryIncident{}
+	for rows.Next() {
+		var h types.HistoryIncident
+		var kind, status string
+		if err := rows.Scan(&h.Domain, &kind, &h.StartTS, &h.EndTS, &status, &h.PeakDown, &h.PeakTotal); err != nil {
+			return nil, err
+		}
+		h.Kind = types.Kind(kind)
+		h.Status = types.Status(status)
+		h.DurationS = int(h.EndTS - h.StartTS)
+		if h.DurationS < 60 {
+			h.DurationS = 60
+		}
+		h.Label = types.LabelFor(h.Domain, h.Kind)
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+// EarliestIncidentTS returns the start of the oldest stored incident, or 0 when
+// there is no history yet. The history page uses it to know when to stop
+// offering "load earlier".
+func (s *Store) EarliestIncidentTS(ctx context.Context) (int64, error) {
+	var ts sql.NullInt64
+	if err := s.db.QueryRowContext(ctx, `SELECT MIN(start_ts) FROM incidents`).Scan(&ts); err != nil {
+		return 0, err
+	}
+	if !ts.Valid {
+		return 0, nil
+	}
+	return ts.Int64, nil
 }
 
 // MergeOngoingIncident folds the currently-active outage into the (coarsely

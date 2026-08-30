@@ -378,12 +378,151 @@ body[data-page="wiki"] #unresolved-section,
 body[data-page="wiki"] .components-section,
 body[data-page="wiki"] .online-section,
 body[data-page="wiki"] #past-incidents-section,
-body[data-page="wiki"] .probes-section {
+body[data-page="wiki"] .probes-section,
+body[data-page="history"] #banner,
+body[data-page="history"] .banner-reactions,
+body[data-page="history"] #unresolved-section,
+body[data-page="history"] .components-section,
+body[data-page="history"] .online-section,
+body[data-page="history"] #past-incidents-section,
+body[data-page="history"] .probes-section {
   display: none;
 }
 
-body[data-page="status"] #wiki-stats-page {
+body[data-page="status"] #wiki-stats-page,
+body[data-page="history"] #wiki-stats-page,
+body[data-page="status"] #history-page,
+body[data-page="wiki"] #history-page {
   display: none;
+}
+
+/* --- History page --------------------------------------------------------- */
+.history-page { margin-top: 2px; }
+
+.history-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 24px;
+  align-items: end;
+  margin-bottom: 28px;
+  padding: 2px 2px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.history-hero h1 {
+  font-size: 30px;
+  line-height: 1.05;
+  letter-spacing: -0.015em;
+}
+.history-hero__text p {
+  max-width: 520px;
+  margin: 8px 0 0;
+  color: var(--text-dim);
+  font-size: 13.5px;
+}
+.history-hero__meta {
+  display: flex;
+  gap: 24px;
+  margin: 0;
+  text-align: right;
+}
+.history-hero__meta dt {
+  margin-bottom: 4px;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+}
+.history-hero__meta dd {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.history-months { display: flex; flex-direction: column; gap: 40px; }
+
+.history-month__head {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-strong);
+}
+.history-month__title {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.history-month__summary {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  letter-spacing: 0.01em;
+}
+.history-month__summary.is-clear { color: var(--text-faint); }
+.history-month__none {
+  margin: 0;
+  padding: 2px 0;
+  font-size: 13px;
+  font-style: italic;
+  color: var(--text-faint);
+}
+
+.history-error {
+  margin-bottom: 22px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-dim);
+}
+
+.history-more {
+  margin: 36px 0 48px;
+  text-align: center;
+}
+.history-more__btn {
+  padding: 9px 20px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.history-more__btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--text-faint);
+}
+.history-more__btn:disabled { cursor: default; opacity: 0.6; }
+.history-more__end {
+  margin: 0;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text-faint);
+}
+
+/* Home page link into the archive. */
+.section-head__link {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-faint);
+  text-decoration: none;
+  letter-spacing: 0.01em;
+}
+.section-head__link:hover { color: var(--text); }
+
+@media (max-width: 560px) {
+  .history-hero {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+  .history-hero__meta { text-align: left; }
+  .history-hero h1 { font-size: 24px; }
 }
 
 /* --- Wiki stats ----------------------------------------------------------- */

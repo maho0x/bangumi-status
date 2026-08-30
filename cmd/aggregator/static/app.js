@@ -32,7 +32,7 @@
       probe_online_summary: (on, tot) => `${on} / ${tot} online`,
       probe_pill_online: "online", probe_pill_offline: "offline",
       no_probes: "No probes registered yet.",
-      detected: "Detected", reported_from: "Reported from",
+      detected: "Detected",
       probes_failing: (b, tot) => `${b} of ${tot} probes failing`,
       peak_failing: (b, tot) => `peak ${b}/${tot} probes failing`,
       inc_down_peak: (b, tot, d) => `Outage · peak ${b}/${tot} probes failing · lasted ~${d}`,
@@ -67,7 +67,7 @@
       metric_bangumi: "Bangumi online",
       metric_traffic: "Site traffic",
       traffic_current: (n) => `${n} viewing now`,
-      traffic_note: "Concurrent status-page viewers, sampled each minute — a proxy for whether people are flocking here because Bangumi is down.",
+      traffic_note: "Status-page viewers: live current count, history as per-minute peak.",
       now_label: "now",
       ago_label: (rel) => rel,
       footer_desc: "Independent, community-run availability monitor. Not affiliated with Bangumi.",
@@ -80,7 +80,18 @@
       sub_live_title: "Live page",
       sub_live_desc: "This page auto-refreshes every 30 seconds — bookmark it for a quick at-a-glance check.",
       modal_foot: "No personal data is collected. This monitor is community-run and open source.",
-      nav_status: "Status", nav_wiki_stats: "Stats",
+      nav_status: "Status", nav_wiki_stats: "Stats", nav_history: "History",
+
+      past_incidents_more: "Full history →",
+      history_title: "Incident history",
+      history_intro: "Availability incidents, archived by month and derived automatically from probe data.",
+      history_earliest_label: "Records since",
+      history_load_more: "Load earlier",
+      history_end: "You've reached the earliest record.",
+      history_empty: "No incidents recorded yet.",
+      history_month_none: "No incidents this month.",
+      history_month_summary: (n, dur) => `${n} incident${n === 1 ? "" : "s"} · ${dur} total downtime`,
+      history_month_clear: "No incidents",
       wiki_recent_scrape: "Scraped", wiki_data_day: "Data day",
       wiki_empty: "No wiki stats yet.", wiki_chart_error: "Unable to load the official chart component.",
       wiki_metric_register: "Registered users", wiki_metric_collection: "Collections",
@@ -115,7 +126,7 @@
       probe_online_summary: (on, tot) => `${on} / ${tot} 在线`,
       probe_pill_online: "在线", probe_pill_offline: "离线",
       no_probes: "暂无探针注册。",
-      detected: "检测于", reported_from: "来自",
+      detected: "检测于",
       probes_failing: (b, tot) => `${b} / ${tot} 个探针异常`,
       peak_failing: (b, tot) => `峰值 ${b}/${tot} 个探针异常`,
       inc_down_peak: (b, tot, d) => `服务中断 · 峰值 ${b}/${tot} 探针异常 · 持续约 ${d}`,
@@ -150,7 +161,7 @@
       metric_bangumi: "班固米在线",
       metric_traffic: "本站访问",
       traffic_current: (n) => `当前 ${n} 人查看`,
-      traffic_note: "Bangumi Status 访问人数历史。",
+      traffic_note: "Bangumi Status 当前访问人数实时更新，历史按每分钟峰值记录。",
       now_label: "现在",
       ago_label: (rel) => rel,
       footer_desc: "社区运营的Bangumi可用性监测。",
@@ -163,7 +174,18 @@
       sub_live_title: "实时页面",
       sub_live_desc: "本页面每30秒自动刷新，收藏以便快速查看。",
       modal_foot: "本监测由社区运营并开源。",
-      nav_status: "状态", nav_wiki_stats: "透视",
+      nav_status: "状态", nav_wiki_stats: "透视", nav_history: "历史",
+
+      past_incidents_more: "全部历史 →",
+      history_title: "历史事故",
+      history_intro: "按月归档的可用性事故记录，从探针数据自动生成。",
+      history_earliest_label: "记录起始",
+      history_load_more: "加载更早",
+      history_end: "已到最早记录。",
+      history_empty: "暂无事故记录。",
+      history_month_none: "本月无事故。",
+      history_month_summary: (n, dur) => `${n} 起事故 · 累计中断 ${dur}`,
+      history_month_clear: "无事故",
       wiki_recent_scrape: "最近抓取", wiki_data_day: "数据日期",
       wiki_empty: "暂无维基透视数据。", wiki_chart_error: "无法加载官方图表组件。",
       wiki_metric_register: "注册用户", wiki_metric_collection: "收藏数",
@@ -214,7 +236,8 @@
   const escapeHTML = (s) => String(s).replace(/[&<>"']/g, c =>
     ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
 
-  const pageRoute = window.location.pathname.replace(/\/+$/, "") === "/stats" ? "wiki" : "status";
+  const ROUTES = { "/stats": "wiki", "/history": "history" };
+  const pageRoute = ROUTES[window.location.pathname.replace(/\/+$/, "")] || "status";
   document.body.dataset.page = pageRoute;
 
   const ICONS = {
@@ -491,12 +514,7 @@
     }
     const views = c.probe_views || [];
     const badProbes = views.filter(v => v.status === "down" || v.status === "degraded");
-    const regions = [...new Set(badProbes.map(v => v.region))].filter(Boolean);
     const bits = [el("span", { class: "mono" }, t("detected") + " " + fmtRelative(c.last_check))];
-    if (regions.length > 0) {
-      bits.push(el("span", { class: "sep" }, "·"));
-      bits.push(el("span", {}, t("reported_from") + " " + regions.map(r => REGION_LABEL[r] || r).join(", ")));
-    }
     if (badProbes.length > 0 && views.length > 0) {
       bits.push(el("span", { class: "sep" }, "·"));
       bits.push(el("span", {}, t("probes_failing", badProbes.length, views.length)));
@@ -658,10 +676,197 @@
     setText(entryEl._metric, fmtRelative(inc.end_ts));
   }
 
+  // --- History page --------------------------------------------------------
+  // Archived incidents, grouped by month like a conventional status history.
+  // The day blocks are the exact same components the home page uses, so guest
+  // folding, cross-day markers and duration text stay consistent between pages.
+  const HISTORY_PAGE_MONTHS = 3;
+  let historyIncidents = new Map(); // "domain|kind|start_ts" -> HistoryIncident
+  let historyMonths = [];           // "YYYY-MM", newest first, months loaded so far
+  let historyEarliestTS = 0;
+  let historyFromTS = 0;            // oldest window boundary fetched so far
+  let historyLoading = false;
+
+  const isoMonthLocal = (ts) => isoDayLocal(ts).slice(0, 7);
+  const ymKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+
+  function fmtMonthLabel(ym) {
+    const [y, m] = ym.split("-").map(Number);
+    return lang === "zh" ? `${y}年${m}月` : `${MONTHS[m - 1]} ${y}`;
+  }
+
+  // The window covering the `count` whole local months ending with `endYM`
+  // (inclusive). Months are the viewer's own, and the request carries the exact
+  // unix bounds, so a month header can never describe a range the server only
+  // partially returned.
+  function monthWindow(endYM, count) {
+    const [y, m] = endYM.split("-").map(Number);
+    const to = new Date(y, m, 1, 0, 0, 0, 0);            // first day of the next month
+    const from = new Date(y, m - count, 1, 0, 0, 0, 0);
+    const months = [];
+    const cur = new Date(y, m - 1, 1);
+    for (let i = 0; i < count; i++) {
+      months.push(ymKey(cur));
+      cur.setMonth(cur.getMonth() - 1);
+    }
+    return { from: Math.floor(from.getTime() / 1000), to: Math.floor(to.getTime() / 1000), months };
+  }
+
+  function renderHistory() {
+    const container = document.getElementById("history-months");
+    const errorEl = document.getElementById("history-error");
+    if (!container) return;
+
+    const earliestEl = document.getElementById("history-earliest");
+    if (earliestEl) {
+      setText(earliestEl, historyEarliestTS ? fmtDayLabel(isoDayLocal(historyEarliestTS)) : "—");
+    }
+
+    if (errorEl) errorEl.hidden = historyIncidents.size > 0 || historyMonths.length > 0;
+
+    // Bucket by month, then by day inside each month.
+    const byMonth = new Map(historyMonths.map(ym => [ym, new Map()]));
+    for (const inc of historyIncidents.values()) {
+      const ym = isoMonthLocal(inc.start_ts);
+      if (!byMonth.has(ym)) byMonth.set(ym, new Map());
+      const days = byMonth.get(ym);
+      const iso = isoDayLocal(inc.start_ts);
+      if (!days.has(iso)) days.set(iso, []);
+      days.get(iso).push({ ...inc, component: inc.label, kind: inc.kind });
+    }
+
+    const monthsData = [...byMonth.keys()].sort().reverse().map(ym => {
+      const days = byMonth.get(ym);
+      // Only real incident days are listed here — unlike the home page, which
+      // pads a fixed 10-day strip so the recent window always reads as a strip.
+      const daysData = [...days.keys()].sort().reverse().map(iso => {
+        const entries = days.get(iso).slice().sort((a, b) => {
+          if (b.start_ts !== a.start_ts) return b.start_ts - a.start_ts;
+          const rank = { down: 0, degraded: 1 };
+          return (rank[a.status] ?? 9) - (rank[b.status] ?? 9);
+        });
+        let hasGuest = false, hasAuth = false;
+        for (const inc of entries) {
+          if (inc.kind === "guest") hasGuest = true;
+          else if (inc.kind === "auth") hasAuth = true;
+        }
+        return { iso, entries, hasGuest, hasAuth };
+      });
+      // The summary counts only non-guest incidents, because guest entries are
+      // folded away by default — a total that includes them would not match
+      // anything the reader can see.
+      let count = 0, downS = 0;
+      for (const day of daysData) {
+        for (const inc of day.entries) {
+          if (inc.kind === "guest") continue;
+          count++;
+          downS += Math.max(60, inc.end_ts - inc.start_ts);
+        }
+      }
+      return { ym, days: daysData, count, downS };
+    });
+
+    reconcile(container, monthsData, m => m.ym, createMonthBlock, updateMonthBlock);
+  }
+
+  function createMonthBlock(m) {
+    const titleEl = el("h2", { class: "history-month__title" });
+    const summaryEl = el("span", { class: "history-month__summary num" });
+    const head = el("header", { class: "history-month__head" }, [titleEl, summaryEl]);
+    const daysEl = el("div", { class: "inc-days" });
+    const noneEl = el("p", { class: "history-month__none" });
+    const block = el("section", { class: "history-month", "data-month": m.ym }, [head, daysEl, noneEl]);
+    block._titleEl = titleEl;
+    block._summaryEl = summaryEl;
+    block._daysEl = daysEl;
+    block._noneEl = noneEl;
+    updateMonthBlock(block, m);
+    return block;
+  }
+
+  function updateMonthBlock(block, m) {
+    setAttr(block, "data-month", m.ym);
+    setText(block._titleEl, fmtMonthLabel(m.ym));
+    setText(block._summaryEl, m.count === 0
+      ? t("history_month_clear")
+      : t("history_month_summary", m.count, fmtDurationLong(m.downS)));
+    setClass(block._summaryEl, "history-month__summary num" + (m.count === 0 ? " is-clear" : ""));
+
+    if (m.days.length === 0) {
+      block._daysEl.replaceChildren();
+      block._noneEl.hidden = false;
+      setText(block._noneEl, t("history_month_none"));
+    } else {
+      block._noneEl.hidden = true;
+      reconcile(block._daysEl, m.days, d => d.iso, createDayBlock, updateDayBlock);
+    }
+  }
+
+  async function loadHistory(endYM) {
+    if (historyLoading) return;
+    historyLoading = true;
+    const btn = document.getElementById("history-more-btn");
+    if (btn) { btn.disabled = true; setText(btn, "…"); }
+    const win = monthWindow(endYM || ymKey(new Date()), HISTORY_PAGE_MONTHS);
+    try {
+      const qs = new URLSearchParams({ from: String(win.from), to: String(win.to) });
+      const res = await fetch("/api/incidents?" + qs.toString());
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+
+      for (const inc of (data.incidents || [])) {
+        historyIncidents.set(`${inc.domain}|${inc.kind}|${inc.start_ts}`, inc);
+      }
+      historyEarliestTS = data.earliest_ts || 0;
+      historyFromTS = historyFromTS ? Math.min(historyFromTS, win.from) : win.from;
+      const seen = new Set(historyMonths);
+      for (const ym of win.months) {
+        if (!seen.has(ym)) { historyMonths.push(ym); seen.add(ym); }
+      }
+      historyMonths.sort().reverse();
+      renderHistory();
+      updateHistoryPager();
+    } catch (err) {
+      const errorEl = document.getElementById("history-error");
+      if (errorEl) { errorEl.hidden = false; setText(errorEl, t("error_load")); }
+    } finally {
+      historyLoading = false;
+      if (btn) { btn.disabled = false; setText(btn, t("history_load_more")); }
+    }
+  }
+
+  // The archive is exhausted once the loaded window reaches past the oldest
+  // stored incident (or there is no history at all yet).
+  function updateHistoryPager() {
+    const btn = document.getElementById("history-more-btn");
+    const end = document.getElementById("history-end");
+    const done = !historyEarliestTS || historyEarliestTS >= historyFromTS;
+    if (btn) btn.hidden = done;
+    if (end) end.hidden = !done || historyIncidents.size === 0;
+  }
+
+  function initHistoryPage() {
+    const btn = document.getElementById("history-more-btn");
+    if (btn) {
+      btn.addEventListener("click", () => {
+        // Continue with the month immediately before the oldest one on screen.
+        const oldest = historyMonths[historyMonths.length - 1];
+        if (!oldest) return;
+        const [y, m] = oldest.split("-").map(Number);
+        loadHistory(ymKey(new Date(y, m - 2, 1)));
+      });
+    }
+    loadHistory();
+  }
+
   // --- Online users chart --------------------------------------------------
   let onlineRange = "24h";
   let onlineMetric = "bangumi"; // "bangumi" (bgm.tv online) | "traffic" (site viewers)
   let onlineIncidents = []; // incident windows from main-site auth components
+  let onlineRawPoints = [];
+  let onlineRawKey = "";
+  let liveTrafficViewers = null;
+  let liveTrafficUpdatedAt = 0;
 
   // uPlot-backed online chart. The library is vendored under /vendor/uplot and
   // lazy-loaded on first draw. Live state for the draw/cursor hooks lives in
@@ -712,9 +917,43 @@
     onlineState = null;
   }
 
+  const currentOnlineKey = () => onlineMetric + "|" + onlineRange;
+
+  function pointsWithLiveTraffic(rawPts) {
+    const pts = Array.isArray(rawPts) ? rawPts.slice() : [];
+    if (onlineMetric !== "traffic" || !Number.isFinite(liveTrafficViewers)) return pts;
+    const live = { ts: liveTrafficUpdatedAt || Math.floor(Date.now() / 1000), count: liveTrafficViewers };
+    const last = pts.length ? pts[pts.length - 1] : null;
+    // History is a per-minute peak, so the live instantaneous count must never
+    // pull the current minute below the peak already recorded for it.
+    if (last && Math.floor(Number(last.ts) / 60) === Math.floor(live.ts / 60)) {
+      live.count = Math.max(live.count, Number(last.count) || 0);
+    }
+    if (last && Number(last.ts) >= live.ts) {
+      pts[pts.length - 1] = live;
+    } else {
+      pts.push(live);
+    }
+    return pts;
+  }
+
+  function applyLiveTraffic(viewers, updatedAt) {
+    const n = Number(viewers);
+    if (!Number.isFinite(n) || n < 0) return;
+    liveTrafficViewers = n;
+    liveTrafficUpdatedAt = Number(updatedAt) || Math.floor(Date.now() / 1000);
+    if (onlineMetric !== "traffic") return;
+    const summaryEl = document.getElementById("online-summary");
+    if (summaryEl) summaryEl.textContent = t("traffic_current", n.toLocaleString());
+    if (onlineRawKey === currentOnlineKey()) {
+      drawOnlineChart(pointsWithLiveTraffic(onlineRawPoints));
+    }
+  }
+
   function drawOnlineChart(rawPts) {
     const summaryEl = document.getElementById("online-summary");
-    const pts = (rawPts || []).filter(p => p && p.count > 0);
+    const pts = (rawPts || []).filter(p => p && Number.isFinite(Number(p.count)) &&
+      (onlineMetric === "traffic" ? Number(p.count) >= 0 : Number(p.count) > 0));
     if (pts.length < 2) {
       destroyOnlineChart();
       const chartEl = document.getElementById("online-chart");
@@ -981,13 +1220,21 @@
     const noteEl = document.getElementById("online-note");
     if (noteEl) noteEl.textContent = t(onlineMetric === "traffic" ? "traffic_note" : "online_note");
     if (onlineMetric === "bangumi" && onlineRange === "24h") {
-      drawOnlineChart((overall && overall.online) || (lastData && lastData.online) || []);
+      onlineRawKey = currentOnlineKey();
+      onlineRawPoints = (overall && overall.online) || (lastData && lastData.online) || [];
+      drawOnlineChart(onlineRawPoints);
       return;
     }
+    const requestKey = currentOnlineKey();
     const path = onlineMetric === "traffic" ? "/api/traffic" : "/api/online";
     fetch(`${path}?range=${onlineRange}`)
       .then(r => r.json())
-      .then(drawOnlineChart)
+      .then(points => {
+        if (requestKey !== currentOnlineKey()) return;
+        onlineRawKey = requestKey;
+        onlineRawPoints = Array.isArray(points) ? points : [];
+        drawOnlineChart(pointsWithLiveTraffic(onlineRawPoints));
+      })
       .catch(() => {});
   }
 
@@ -1369,6 +1616,8 @@
   function applyRouteChrome() {
     const wikiPage = document.getElementById("wiki-stats-page");
     if (wikiPage) wikiPage.hidden = pageRoute !== "wiki";
+    const historyPage = document.getElementById("history-page");
+    if (historyPage) historyPage.hidden = pageRoute !== "history";
     document.querySelectorAll(".top-nav a[data-route-link]").forEach(a => {
       const active = a.dataset.routeLink === pageRoute;
       a.setAttribute("aria-current", active ? "page" : "false");
@@ -1633,8 +1882,9 @@
     setT(".components-section .section-head h2", "section_current");
     setT(".components-section .section-head .section-head__hint", "hint_30d");
     setT("#unresolved-section h2", "section_unresolved");
-    setT(".inc-section:not(#unresolved-section) .section-head h2", "section_past");
-    setT(".inc-section:not(#unresolved-section) .section-head__hint", "hint_past");
+    setT("#past-incidents-section .section-head h2", "section_past");
+    setT("#past-incidents-section .section-head__hint", "hint_past");
+    setT("#past-incidents-more", "past_incidents_more");
     setT(".probes-section h2", "section_probes");
     setT(".online-section h2", "section_online");
     setT('.online-metric[data-metric="bangumi"]', "metric_bangumi");
@@ -1647,6 +1897,13 @@
     setT(".ftr__link", "atom_feed");
     setT(".top-nav a[data-route-link='status']", "nav_status");
     setT(".top-nav a[data-route-link='wiki']", "nav_wiki_stats");
+    setT(".top-nav a[data-route-link='history']", "nav_history");
+    setT(".history-hero__text h1", "history_title");
+    setT(".history-hero__text p", "history_intro");
+    setT(".history-hero__meta div:nth-child(1) dt", "history_earliest_label");
+    setT("#history-more-btn", "history_load_more");
+    setT("#history-end", "history_end");
+    setT("#history-error", "history_empty");
     setT(".wiki-hero__meta div:nth-child(1) dt", "wiki_recent_scrape");
     setT(".wiki-hero__meta div:nth-child(2) dt", "wiki_data_day");
     setT("#wiki-stats-error", "wiki_empty");
@@ -1742,6 +1999,7 @@
       localStorage.setItem("lang", lang);
       applyI18n();
       if (pageRoute === "wiki" && lastWikiStats) renderWikiStats(lastWikiStats);
+      else if (pageRoute === "history") renderHistory();
       else if (lastData) render(lastData);
     });
   }
@@ -2051,6 +2309,32 @@
     } catch (e) { /* SSE unavailable — poll only */ }
   }
 
+  // Live site-viewer count. Historical points stay minute-sampled, while this
+  // stream updates the summary and the chart's right edge on every join/leave.
+  let trafficES = null;
+  let trafficESBackoff = 1000;
+  function connectTrafficStream() {
+    if (typeof EventSource === "undefined" || trafficES) return;
+    try {
+      const es = new EventSource("/api/traffic/stream");
+      trafficES = es;
+      es.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data);
+          applyLiveTraffic(data.viewers, data.updated_at);
+          trafficESBackoff = 1000;
+        } catch (e) { /* ignore malformed frame */ }
+      };
+      es.onerror = () => {
+        if (trafficES !== es) return;
+        es.close();
+        trafficES = null;
+        setTimeout(connectTrafficStream, trafficESBackoff);
+        trafficESBackoff = Math.min(trafficESBackoff * 2, 30000);
+      };
+    } catch (e) { /* minute-sampled history remains available */ }
+  }
+
   applyRouteChrome();
   applyI18n();
   if (pageRoute === "wiki") {
@@ -2058,9 +2342,13 @@
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) initWikiStatsPage();
     });
+  } else if (pageRoute === "history") {
+    // The archive is cold data — no SSE, no polling, no reactions.
+    initHistoryPage();
   } else {
     refresh();
     connectStatusStream();
+    connectTrafficStream();
     setInterval(refresh, 30000);
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) refresh();
