@@ -127,6 +127,23 @@ func (t *Telegram) Process(comps []types.ComponentStatus) {
 		if !seen {
 			t.last[key] = current
 			delete(t.pending, key)
+			// Process state is in-memory, so a restart during an outage loses the
+			// active entry even though the rolled-up component is still non-ok.
+			// Restore it silently on the first observation: do not duplicate the
+			// outage alert, but retain enough state to announce its recovery.
+			if current != types.StatusOK && telegramAlertable(c) {
+				startedAt := now
+				if c.Since > 0 && c.Since <= now.Unix() {
+					startedAt = time.Unix(c.Since, 0)
+				}
+				t.outages[key] = &groupEntry{
+					Domain:    c.Domain,
+					Kind:      c.Kind,
+					Status:    current,
+					StartedAt: startedAt,
+				}
+				log.Printf("telegram: restored active outage for %s", key)
+			}
 			continue
 		}
 		if current == notified {
@@ -140,9 +157,7 @@ func (t *Telegram) Process(comps []types.ComponentStatus) {
 			p.Count++
 		}
 		if p.Count >= 2 {
-			// Only auth kind triggers messages; api/next subdomains are silent.
-			silent := c.Domain == "api.bgm.tv" || c.Domain == "next.bgm.tv"
-			if c.Kind != types.KindGuest && !silent {
+			if telegramAlertable(c) {
 				entry, activeOutage := t.outages[key]
 				switch {
 				case current != types.StatusOK && !activeOutage:
@@ -160,7 +175,10 @@ func (t *Telegram) Process(comps []types.ComponentStatus) {
 					})
 				case current == types.StatusOK && activeOutage:
 					replyTo := 0
-					wasDegradedGroup := false
+					// A restored entry has no Telegram group. Treat a restored
+					// degraded entry like a normal all-degraded group so its
+					// recovery remains intentionally silent.
+					wasDegradedGroup := entry.Status == types.StatusDegraded
 					if group := t.groups[entry.GroupID]; group != nil {
 						replyTo = group.MessageID
 						wasDegradedGroup = !groupHasDown(group)
@@ -202,6 +220,11 @@ func (t *Telegram) Process(comps []types.ComponentStatus) {
 	if len(recoveries) > 0 {
 		t.handleRecoveries(recoveries)
 	}
+}
+
+func telegramAlertable(c types.ComponentStatus) bool {
+	// Only authenticated main-site checks trigger messages; API/next are silent.
+	return c.Kind != types.KindGuest && c.Domain != "api.bgm.tv" && c.Domain != "next.bgm.tv"
 }
 
 // handleDegradedRecoveries is intentionally a no-op: degraded alerts do not
