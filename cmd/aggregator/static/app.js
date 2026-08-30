@@ -86,8 +86,8 @@
       history_title: "Incident history",
       history_intro: "Availability incidents, archived by month and derived automatically from probe data.",
       history_earliest_label: "Records since",
-      history_load_more: "Load earlier",
-      history_end: "You've reached the earliest record.",
+      history_prev: "Earlier months",
+      history_next: "Later months",
       history_empty: "No incidents recorded yet.",
       history_month_none: "No incidents this month.",
       history_month_summary: (n, dur) => `${n} incident${n === 1 ? "" : "s"} · ${dur} total downtime`,
@@ -180,8 +180,8 @@
       history_title: "历史事故",
       history_intro: "按月归档的可用性事故记录，从探针数据自动生成。",
       history_earliest_label: "记录起始",
-      history_load_more: "加载更早",
-      history_end: "已到最早记录。",
+      history_prev: "更早的月份",
+      history_next: "更近的月份",
       history_empty: "暂无事故记录。",
       history_month_none: "本月无事故。",
       history_month_summary: (n, dur) => `${n} 起事故 · 累计中断 ${dur}`,
@@ -680,11 +680,13 @@
   // Archived incidents, grouped by month like a conventional status history.
   // The day blocks are the exact same components the home page uses, so guest
   // folding, cross-day markers and duration text stay consistent between pages.
-  const HISTORY_PAGE_MONTHS = 3;
-  let historyIncidents = new Map(); // "domain|kind|start_ts" -> HistoryIncident
-  let historyMonths = [];           // "YYYY-MM", newest first, months loaded so far
+  // Paging moves a fixed window instead of appending to it: one fetch, one
+  // window, so the range label in the header is always the whole story.
+  const HISTORY_PAGE_MONTHS = 4;
+  let historyIncidents = [];  // the current window's incidents, newest first
+  let historyMonths = [];     // "YYYY-MM", newest first, the window's months
+  let historyEndYM = "";      // newest month in the window
   let historyEarliestTS = 0;
-  let historyFromTS = 0;            // oldest window boundary fetched so far
   let historyLoading = false;
 
   const isoMonthLocal = (ts) => isoDayLocal(ts).slice(0, 7);
@@ -722,11 +724,13 @@
       setText(earliestEl, historyEarliestTS ? fmtDayLabel(isoDayLocal(historyEarliestTS)) : "—");
     }
 
-    if (errorEl) errorEl.hidden = historyIncidents.size > 0 || historyMonths.length > 0;
+    // Only a genuinely empty archive is an error state; an empty window is
+    // normal and says so through its own "no incidents" month headers.
+    if (errorEl) errorEl.hidden = historyEarliestTS !== 0;
 
     // Bucket by month, then by day inside each month.
     const byMonth = new Map(historyMonths.map(ym => [ym, new Map()]));
-    for (const inc of historyIncidents.values()) {
+    for (const inc of historyIncidents) {
       const ym = isoMonthLocal(inc.start_ts);
       if (!byMonth.has(ym)) byMonth.set(ym, new Map());
       const days = byMonth.get(ym);
@@ -767,6 +771,7 @@
     });
 
     reconcile(container, monthsData, m => m.ym, createMonthBlock, updateMonthBlock);
+    updateHistoryPager();
   }
 
   function createMonthBlock(m) {
@@ -805,57 +810,80 @@
   async function loadHistory(endYM) {
     if (historyLoading) return;
     historyLoading = true;
-    const btn = document.getElementById("history-more-btn");
-    if (btn) { btn.disabled = true; setText(btn, "…"); }
-    const win = monthWindow(endYM || ymKey(new Date()), HISTORY_PAGE_MONTHS);
+    updateHistoryPager();
+    const end = endYM || ymKey(new Date());
+    const win = monthWindow(end, HISTORY_PAGE_MONTHS);
     try {
       const qs = new URLSearchParams({ from: String(win.from), to: String(win.to) });
       const res = await fetch("/api/incidents?" + qs.toString());
       if (!res.ok) throw new Error("HTTP " + res.status);
       const data = await res.json();
 
-      for (const inc of (data.incidents || [])) {
-        historyIncidents.set(`${inc.domain}|${inc.kind}|${inc.start_ts}`, inc);
-      }
+      historyIncidents = data.incidents || [];
       historyEarliestTS = data.earliest_ts || 0;
-      historyFromTS = historyFromTS ? Math.min(historyFromTS, win.from) : win.from;
-      const seen = new Set(historyMonths);
-      for (const ym of win.months) {
-        if (!seen.has(ym)) { historyMonths.push(ym); seen.add(ym); }
-      }
-      historyMonths.sort().reverse();
+      historyEndYM = end;
+      historyMonths = win.months;
+      historyLoading = false;
       renderHistory();
-      updateHistoryPager();
     } catch (err) {
       const errorEl = document.getElementById("history-error");
       if (errorEl) { errorEl.hidden = false; setText(errorEl, t("error_load")); }
     } finally {
       historyLoading = false;
-      if (btn) { btn.disabled = false; setText(btn, t("history_load_more")); }
+      updateHistoryPager();
     }
   }
 
-  // The archive is exhausted once the loaded window reaches past the oldest
-  // stored incident (or there is no history at all yet).
+  // Where the current window sits in the archive: the oldest stored incident is
+  // the floor, the current month the ceiling.
+  function historyBounds() {
+    const newest = historyMonths[0];
+    const win = newest ? monthWindow(newest, historyMonths.length) : null;
+    return {
+      atOldest: !win || !historyEarliestTS || historyEarliestTS >= win.from,
+      atNewest: !historyEndYM || historyEndYM >= ymKey(new Date()),
+    };
+  }
+
+  // The range label doubles as the position indicator. A chevron at its bound
+  // stays visible and goes disabled rather than disappearing, so the pager does
+  // not change shape as the reader walks back through the archive.
   function updateHistoryPager() {
-    const btn = document.getElementById("history-more-btn");
-    const end = document.getElementById("history-end");
-    const done = !historyEarliestTS || historyEarliestTS >= historyFromTS;
-    if (btn) btn.hidden = done;
-    if (end) end.hidden = !done || historyIncidents.size === 0;
+    const prevBtn = document.getElementById("history-prev");
+    const nextBtn = document.getElementById("history-next");
+    const rangeEl = document.getElementById("history-range");
+    const newest = historyMonths[0];
+    const oldest = historyMonths[historyMonths.length - 1];
+
+    if (rangeEl) {
+      setText(rangeEl, newest
+        ? (oldest === newest ? fmtMonthLabel(newest) : `${fmtMonthLabel(oldest)} – ${fmtMonthLabel(newest)}`)
+        : "—");
+    }
+
+    const { atOldest, atNewest } = historyBounds();
+    if (prevBtn) prevBtn.disabled = historyLoading || atOldest;
+    if (nextBtn) nextBtn.disabled = historyLoading || atNewest;
+  }
+
+  // Move the window by whole pages, stopping at the same bounds the chevrons'
+  // disabled state advertises.
+  function shiftHistory(pages) {
+    if (historyLoading || !historyEndYM) return;
+    const { atOldest, atNewest } = historyBounds();
+    if (pages < 0 ? atOldest : atNewest) return;
+    const [y, m] = historyEndYM.split("-").map(Number);
+    const capped = ymKey(new Date());
+    let ym = ymKey(new Date(y, m - 1 + pages * HISTORY_PAGE_MONTHS, 1));
+    if (ym > capped) ym = capped;
+    if (ym !== historyEndYM) loadHistory(ym);
   }
 
   function initHistoryPage() {
-    const btn = document.getElementById("history-more-btn");
-    if (btn) {
-      btn.addEventListener("click", () => {
-        // Continue with the month immediately before the oldest one on screen.
-        const oldest = historyMonths[historyMonths.length - 1];
-        if (!oldest) return;
-        const [y, m] = oldest.split("-").map(Number);
-        loadHistory(ymKey(new Date(y, m - 2, 1)));
-      });
-    }
+    const prevBtn = document.getElementById("history-prev");
+    const nextBtn = document.getElementById("history-next");
+    if (prevBtn) prevBtn.addEventListener("click", () => shiftHistory(-1));
+    if (nextBtn) nextBtn.addEventListener("click", () => shiftHistory(1));
     loadHistory();
   }
 
@@ -1878,6 +1906,7 @@
   // --- Static i18n ---------------------------------------------------------
   function applyI18n() {
     const setT = (sel, key) => { const n = document.querySelector(sel); if (n) n.textContent = t(key); };
+    const setAria = (sel, key) => { const n = document.querySelector(sel); if (n) n.setAttribute("aria-label", t(key)); };
 
     setT(".components-section .section-head h2", "section_current");
     setT(".components-section .section-head .section-head__hint", "hint_30d");
@@ -1901,9 +1930,9 @@
     setT(".history-hero__text h1", "history_title");
     setT(".history-hero__text p", "history_intro");
     setT(".history-hero__meta div:nth-child(1) dt", "history_earliest_label");
-    setT("#history-more-btn", "history_load_more");
-    setT("#history-end", "history_end");
     setT("#history-error", "history_empty");
+    setAria("#history-prev", "history_prev");
+    setAria("#history-next", "history_next");
     setT(".wiki-hero__meta div:nth-child(1) dt", "wiki_recent_scrape");
     setT(".wiki-hero__meta div:nth-child(2) dt", "wiki_data_day");
     setT("#wiki-stats-error", "wiki_empty");

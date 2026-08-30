@@ -118,7 +118,18 @@
     <section id="history-page" class="history-page" aria-label="历史事故" hidden>
       <header class="history-hero">
         <div class="history-hero__text">
-          <h1>历史事故</h1>
+          <div class="history-titlerow">
+            <h1>历史事故</h1>
+            <nav class="history-pager" id="history-pager" aria-label="翻页">
+              <button class="history-pager__nav" id="history-prev" type="button" aria-label="更早的月份">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.75 19.5 8.25 12l7.5-7.5"/></svg>
+              </button>
+              <span class="history-pager__range num" id="history-range" aria-live="polite">—</span>
+              <button class="history-pager__nav" id="history-next" type="button" aria-label="更近的月份">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.25 4.5 15.75 12l-7.5 7.5"/></svg>
+              </button>
+            </nav>
+          </div>
           <p>按月归档的可用性事故记录，从探针数据自动生成。</p>
         </div>
         <dl class="history-hero__meta">
@@ -131,11 +142,6 @@
 
       <div id="history-months" class="history-months"></div>
       <div id="history-error" class="history-error" hidden>暂无数据。</div>
-
-      <div class="history-more">
-        <button type="button" id="history-more-btn" class="history-more__btn">加载更早</button>
-        <p class="history-more__end" id="history-end" hidden>已到最早记录。</p>
-      </div>
     </section>
 
     <section id="unresolved-section" class="inc-section inc-section--unresolved" aria-label="未解决的事故" hidden>
