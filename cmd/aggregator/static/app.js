@@ -1964,7 +1964,7 @@
     if (subDescs[1])  subDescs[1].textContent  = t("sub_tg_desc");
     if (subDescs[2])  subDescs[2].textContent  = t("sub_live_desc");
 
-    // Footer meta: "<auto-refresh> · <Atom feed>"
+    // Footer meta: "<auto-refresh> · <Atom feed> · GitHub"
     const ftrSpans = document.querySelectorAll(".ftr__meta > span");
     if (ftrSpans[0]) ftrSpans[0].textContent = t("auto_refresh");
 
