@@ -1,6 +1,13 @@
+// Package types holds the data model shared by the probe, the aggregator and
+// the frontend. Everything here is part of a wire format: IngestPayload is the
+// probe protocol, Overall and IncidentHistory are public API responses.
 package types
 
 import "time"
+
+// CST is the project's reporting calendar: daily buckets, the daily Telegram
+// report and the history page's month boundaries all use UTC+8.
+var CST = time.FixedZone("CST", 8*60*60)
 
 type Status string
 
@@ -10,54 +17,44 @@ const (
 	StatusDown     Status = "down"
 )
 
+// Rank orders statuses by severity: ok < degraded < down.
+func (s Status) Rank() int {
+	switch s {
+	case StatusDown:
+		return 2
+	case StatusDegraded:
+		return 1
+	}
+	return 0
+}
+
+// Worst returns the more severe of a and b.
+func Worst(a, b Status) Status {
+	if b.Rank() > a.Rank() {
+		return b
+	}
+	return a
+}
+
+// Message is the English headline for an overall status.
+func (s Status) Message() string {
+	switch s {
+	case StatusOK:
+		return "All systems operational"
+	case StatusDegraded:
+		return "Some systems experiencing degraded performance"
+	case StatusDown:
+		return "Major outage detected"
+	}
+	return ""
+}
+
 type Kind string
 
 const (
 	KindGuest Kind = "guest"
 	KindAuth  Kind = "auth"
 )
-
-// SiteConfig describes which kinds are monitored for a domain.
-type SiteConfig struct {
-	Domain string
-	Kinds  []Kind
-}
-
-// SiteConfigs is the authoritative list of monitored sites and their kinds.
-var SiteConfigs = []SiteConfig{
-	{"bgm.tv", []Kind{KindGuest, KindAuth}},
-	{"bangumi.tv", []Kind{KindGuest, KindAuth}},
-	{"next.bgm.tv/p1", []Kind{KindGuest, KindAuth}},
-	{"api.bgm.tv", []Kind{KindGuest, KindAuth}},
-}
-
-// Sites returns the ordered domain list (UI grouping order).
-var Sites = func() []string {
-	s := make([]string, len(SiteConfigs))
-	for i, c := range SiteConfigs {
-		s[i] = c.Domain
-	}
-	return s
-}()
-
-// Kinds is the union of all kinds across sites (kept for compatibility).
-var Kinds = []Kind{KindGuest, KindAuth}
-
-// IsMonitoredComponent reports whether a reported result belongs to the active
-// target set.
-func IsMonitoredComponent(domain string, kind Kind) bool {
-	for _, sc := range SiteConfigs {
-		if sc.Domain != domain {
-			continue
-		}
-		for _, k := range sc.Kinds {
-			if k == kind {
-				return true
-			}
-		}
-	}
-	return false
-}
 
 // Result is one probe observation.
 type Result struct {
@@ -72,6 +69,20 @@ type Result struct {
 	Err      string `json:"err,omitempty"`
 }
 
+// Valid rejects malformed results and ones older than 1h or more than 5min in
+// the future.
+func (r Result) Valid() bool {
+	if r.Probe == "" || r.Domain == "" || r.Kind == "" {
+		return false
+	}
+	if r.Status != StatusOK && r.Status != StatusDegraded && r.Status != StatusDown {
+		return false
+	}
+	now := time.Now().Unix()
+	return r.TS >= now-3600 && r.TS <= now+300
+}
+
+// IngestPayload is the body a probe POSTs to /api/ingest.
 type IngestPayload struct {
 	Probe       string   `json:"probe"`
 	Region      string   `json:"region"`
@@ -80,7 +91,7 @@ type IngestPayload struct {
 	OnlineTS    int64    `json:"online_ts,omitempty"`
 }
 
-// OnlinePoint is one sample of the bangumi.tv "online: N" counter.
+// OnlinePoint is one sample of a (ts, value) series.
 //
 // For raw (per-minute) series Count is the sampled value and Low/Peak are
 // omitted. For bucketed series Count is the per-bucket average (the trend),
@@ -128,41 +139,18 @@ type Component struct {
 	Label  string `json:"label"`
 }
 
-func AllComponents() []Component {
-	var out []Component
-	for _, sc := range SiteConfigs {
-		for _, k := range sc.Kinds {
-			out = append(out, Component{Domain: sc.Domain, Kind: k, Label: LabelFor(sc.Domain, k)})
-		}
-	}
-	return out
-}
+// Key identifies the component in maps.
+func (c Component) Key() ComponentKey { return ComponentKey{c.Domain, c.Kind} }
 
-func LabelFor(site string, kind Kind) string {
-	if site == "next.bgm.tv/p1" {
-		if kind == KindGuest {
-			return "next.bgm.tv · API (/p1)"
-		}
-		return "next.bgm.tv · Authenticated (/p1/me)"
-	}
-	if site == "api.bgm.tv" {
-		if kind == KindGuest {
-			return site + " · Public endpoint"
-		}
-		return site + " · Authenticated"
-	}
-	switch kind {
-	case KindGuest:
-		return site + " · Guest"
-	case KindAuth:
-		return site + " · Authenticated"
-	}
-	return site
+// ComponentKey identifies one monitored (domain, kind) pair.
+type ComponentKey struct {
+	Domain string
+	Kind   Kind
 }
 
 // DayBucket is a single daily uptime cell (used in 30-day strip).
 type DayBucket struct {
-	Day     string  `json:"day"` // YYYY-MM-DD (UTC)
+	Day     string  `json:"day"` // YYYY-MM-DD (CST)
 	Uptime  float64 `json:"uptime"`
 	Total   int     `json:"total"`
 	Down    int     `json:"down"`
@@ -197,10 +185,10 @@ type Incident struct {
 // The standalone history page lists incidents across all components at once, so
 // unlike ComponentStatus.Incidents each entry has to name its own component.
 type HistoryIncident struct {
-	Incident
-	Domain string `json:"domain"`
-	Kind   Kind   `json:"kind"`
-	Label  string `json:"label"`
+	Incident `tstype:",extends"`
+	Domain   string `json:"domain"`
+	Kind     Kind   `json:"kind"`
+	Label    string `json:"label"`
 }
 
 // IncidentHistory is the /api/incidents body: one page of archived incidents
@@ -238,17 +226,9 @@ type Overall struct {
 	Online     []OnlinePoint     `json:"online,omitempty"`
 }
 
-func (r Result) Valid() bool {
-	if r.Probe == "" || r.Domain == "" || r.Kind == "" {
-		return false
-	}
-	if r.Status != StatusOK && r.Status != StatusDegraded && r.Status != StatusDown {
-		return false
-	}
-	// reject results older than 1h or more than 5min in the future
-	now := time.Now().Unix()
-	if r.TS < now-3600 || r.TS > now+300 {
-		return false
-	}
-	return true
+// ReactionCount is an aggregated count for one emoji over the active window.
+type ReactionCount struct {
+	EmojiID int  `json:"emoji_id"`
+	Count   int  `json:"count"`
+	Mine    bool `json:"mine"`
 }

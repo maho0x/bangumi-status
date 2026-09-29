@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
-# Cross-compile aggregator (amd64) and probe (amd64 + arm64) into ./dist/
+# Build the frontend, then cross-compile aggregator (amd64) and probe
+# (amd64 + arm64) into ./dist/. The aggregator embeds web/dist.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+echo ">> web"
+(cd web && npm ci --no-fund --no-audit && npm run build)
+
 mkdir -p dist
 export CGO_ENABLED=0
-
-echo ">> aggregator linux/amd64"
-GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/aggregator-linux-amd64 ./cmd/aggregator
-
-echo ">> probe linux/amd64"
-GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/probe-linux-amd64 ./cmd/probe
-
-echo ">> probe linux/arm64"
-GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o dist/probe-linux-arm64 ./cmd/probe
+build() { GOOS=linux GOARCH="$2" go build -trimpath -ldflags "-s -w" -o "dist/$1-linux-$2" "./cmd/$1"; echo ">> $1 linux/$2"; }
+build aggregator amd64
+build probe amd64
+build probe arm64
 
 ls -la dist/

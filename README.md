@@ -44,14 +44,20 @@ Multi-region probes with a **dynamic 2/3-majority quorum** (ceil(2/3 × active p
 
 ### 前置依赖 / Prerequisites
 
-- Go 1.21+
+- Go 1.25+
+- Node.js 22+（仅构建前端 / frontend build only）
 - PostgreSQL 14+
 
 ### 编译 / Build
 
 ```bash
 bash deploy/build.sh
+# 先构建前端 (web/, Svelte 5 + Vite) 再交叉编译；前端会嵌入聚合器二进制
+# Builds the frontend (web/, Svelte 5 + Vite) first, then cross-compiles; the site is embedded in the aggregator
 # 输出 / outputs: dist/aggregator-linux-amd64, dist/probe-linux-amd64, dist/probe-linux-arm64
+
+go test ./...            # 测试 / tests
+cd web && npm run dev    # 前端开发服务器 / frontend dev server (proxies /api → :8080)
 ```
 
 ### 部署聚合器 / Deploy Aggregator
@@ -67,7 +73,6 @@ DB_DSN=postgres://user:pass@localhost:5432/bangumi_status?sslmode=disable
 # 可选 / optional
 TELEGRAM_BOT_TOKEN=<bot token>
 TELEGRAM_CHAT_ID=<chat id>
-STATUS_PAGE_URL=https://your-domain.example
 
 # 第三方探针 token：每个第三方一个 token，绑定一个 PROBE_ID 前缀
 # 格式：token:prefix;token2:prefix2

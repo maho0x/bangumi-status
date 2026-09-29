@@ -1,0 +1,44 @@
+{
+ "daily": [
+  "sendMessage\n🎉 班固米昨天没炸！ (2026-03-01) 🎉\n太棒了！班固米 (bangumi.tv, bgm.tv) 在昨天服务一切正常，いちご100%！\n#日报",
+  "sendMessage\n💥 班固米昨天炸了！ (2026-03-02) 💥\n• bgm.tv：中断（91.23%）\n• bangumi.tv：降级（99.50%）\n#日报"
+ ],
+ "degraded-silent-recovery": [
+  "sendMessage\nBangumi 有点不对劲\n在 T\n🟡 \u003cb\u003ebangumi.tv\u003c/b\u003e 响应异常\n#降级"
+ ],
+ "degraded-then-down-then-recover": [
+  "sendMessage\nBangumi 有点不对劲\n在 T\n🟡 \u003cb\u003ebgm.tv\u003c/b\u003e 响应异常\n#降级",
+  "sendMessage\nBangumi 可能Boom了\n在 T\n🔴 \u003cb\u003ebgm.tv\u003c/b\u003e 中断\n#炸了",
+  "sendMessage reply_to_message_id=102\nBangumi 活了！\n开始于 T\n恢复于 T\n\u003cb\u003ebgm.tv\u003c/b\u003e 恢复正常，这次大概炸了 \u003cb\u003eDUR\u003c/b\u003e。\n#活了"
+ ],
+ "edit-gone": [
+  "sendMessage\nBangumi 可能Boom了\n在 T\n🔴 \u003cb\u003ebgm.tv\u003c/b\u003e 中断\n#炸了",
+  "editMessageText message_id=101\nBangumi 可能Boom了\n在 T\n🔴 \u003cb\u003ebgm.tv\u003c/b\u003e 中断\n🔴 \u003cb\u003ebangumi.tv\u003c/b\u003e 中断\n#炸了",
+  "sendMessage\nBangumi 可能Boom了\n在 T\n🔴 \u003cb\u003ebangumi.tv\u003c/b\u003e 中断\n#炸了",
+  "sendMessage reply_to_message_id=101\nBangumi 活了！\n开始于 T\n恢复于 T\n\u003cb\u003ebgm.tv、bangumi.tv\u003c/b\u003e 恢复正常，这次大概炸了 \u003cb\u003eDUR\u003c/b\u003e。\n#活了"
+ ],
+ "flapping": null,
+ "no-merge-window": [
+  "sendMessage\nBangumi 可能Boom了\n在 T\n🔴 \u003cb\u003ebgm.tv\u003c/b\u003e 中断\n#炸了",
+  "sendMessage\nBangumi 可能Boom了\n在 T\n🔴 \u003cb\u003ebangumi.tv\u003c/b\u003e 中断\n#炸了",
+  "sendMessage reply_to_message_id=101\nBangumi 活了！\n开始于 T\n恢复于 T\n\u003cb\u003ebgm.tv\u003c/b\u003e 恢复正常，这次大概炸了 \u003cb\u003eDUR\u003c/b\u003e。\n#活了",
+  "sendMessage reply_to_message_id=102\nBangumi 活了！\n开始于 T\n恢复于 T\n\u003cb\u003ebangumi.tv\u003c/b\u003e 恢复正常，这次大概炸了 \u003cb\u003eDUR\u003c/b\u003e。\n#活了"
+ ],
+ "non-alertable": null,
+ "outage-merge-recover": [
+  "sendMessage\nBangumi 可能Boom了\n在 T\n🔴 \u003cb\u003ebgm.tv\u003c/b\u003e 中断\n#炸了",
+  "editMessageText message_id=101\nBangumi 可能Boom了\n在 T\n🔴 \u003cb\u003ebgm.tv\u003c/b\u003e 中断\n🔴 \u003cb\u003ebangumi.tv\u003c/b\u003e 中断\n#炸了",
+  "sendMessage reply_to_message_id=101\nBangumi 活了！\n开始于 T\n恢复于 T\n\u003cb\u003ebgm.tv、bangumi.tv\u003c/b\u003e 恢复正常，这次大概炸了 \u003cb\u003eDUR\u003c/b\u003e。\n#活了"
+ ],
+ "restart-restore": [
+  "sendMessage\nBangumi 活了！\n开始于 T\n恢复于 T\n\u003cb\u003ebgm.tv\u003c/b\u003e 恢复正常，这次大概炸了 \u003cb\u003eDUR\u003c/b\u003e。\n#活了"
+ ],
+ "summary": [
+  "sendMessage\n📊 \u003cb\u003eBangumi Status\u003c/b\u003e\n🔴 \u003cb\u003e服务中断（2 个）\u003c/b\u003e\n\n\u003ccode\u003ebgm.tv        [DOWN] 97.12%\nbangumi.tv    [ OK ] 100%  \nnext.bgm.tv   [ OK ] 100%  \napi.bgm.tv    [WARN]   —   \n\u003c/code\u003e\n📡 2/3 探针  ·  🕐 DATE T UTC",
+  "pinChatMessage message_id=101",
+  "editMessageText message_id=101\n📊 \u003cb\u003eBangumi Status\u003c/b\u003e\n✅ \u003cb\u003e全部系统正常\u003c/b\u003e\n\n\u003ccode\u003ebgm.tv        [ OK ] 100%  \nbangumi.tv    [ OK ] 100%  \nnext.bgm.tv   [ OK ] 100%  \napi.bgm.tv    [ OK ] 100%  \n\u003c/code\u003e\n📡 0/0 探针  ·  🕐 DATE T UTC",
+  "editMessageText message_id=101\n📊 \u003cb\u003eBangumi Status\u003c/b\u003e\n🔴 \u003cb\u003e服务中断（2 个）\u003c/b\u003e\n\n\u003ccode\u003ebgm.tv        [DOWN] 97.12%\nbangumi.tv    [ OK ] 100%  \nnext.bgm.tv   [ OK ] 100%  \napi.bgm.tv    [WARN]   —   \n\u003c/code\u003e\n📡 2/3 探针  ·  🕐 DATE T UTC",
+  "sendMessage\n📊 \u003cb\u003eBangumi Status\u003c/b\u003e\n🔴 \u003cb\u003e服务中断（2 个）\u003c/b\u003e\n\n\u003ccode\u003ebgm.tv        [DOWN] 97.12%\nbangumi.tv    [ OK ] 100%  \nnext.bgm.tv   [ OK ] 100%  \napi.bgm.tv    [WARN]   —   \n\u003c/code\u003e\n📡 2/3 探针  ·  🕐 DATE T UTC",
+  "pinChatMessage message_id=102"
+ ]
+}

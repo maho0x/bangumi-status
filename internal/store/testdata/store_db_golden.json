@@ -1,0 +1,1008 @@
+{
+ "buckets bangumi.tv|guest": [
+  {
+   "day": "D-29",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-28",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-27",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-26",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-25",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-24",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-23",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-22",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-21",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-20",
+   "uptime": 98.33333333333333,
+   "total": 900,
+   "down": 0,
+   "degrade": 15,
+   "status": "degraded"
+  },
+  {
+   "day": "D-19",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-18",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-17",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-16",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-15",
+   "uptime": 98.88888888888889,
+   "total": 900,
+   "down": 0,
+   "degrade": 10,
+   "status": "degraded"
+  },
+  {
+   "day": "D-14",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-13",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-12",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-11",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-10",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-9",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-8",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-7",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-6",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-5",
+   "uptime": 99.44444444444444,
+   "total": 900,
+   "down": 0,
+   "degrade": 5,
+   "status": "degraded"
+  },
+  {
+   "day": "D-4",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-3",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-2",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-1",
+   "uptime": 99.44444444444444,
+   "total": 900,
+   "down": 0,
+   "degrade": 5,
+   "status": "degraded"
+  },
+  {
+   "day": "D+0",
+   "uptime": 99.44444444444444,
+   "total": 900,
+   "down": 0,
+   "degrade": 5,
+   "status": "degraded"
+  }
+ ],
+ "buckets bgm.tv|auth": [
+  {
+   "day": "D-29",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-28",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-27",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-26",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-25",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-24",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-23",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-22",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-21",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-20",
+   "uptime": 83.33333333333334,
+   "total": 900,
+   "down": 150,
+   "degrade": 0,
+   "status": "down"
+  },
+  {
+   "day": "D-19",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-18",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-17",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-16",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-15",
+   "uptime": 83.33333333333334,
+   "total": 900,
+   "down": 150,
+   "degrade": 0,
+   "status": "down"
+  },
+  {
+   "day": "D-14",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-13",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-12",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-11",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-10",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-9",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-8",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-7",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-6",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-5",
+   "uptime": 83.33333333333334,
+   "total": 900,
+   "down": 150,
+   "degrade": 0,
+   "status": "down"
+  },
+  {
+   "day": "D-4",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-3",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-2",
+   "uptime": 0,
+   "total": 0,
+   "down": 0,
+   "degrade": 0,
+   "status": ""
+  },
+  {
+   "day": "D-1",
+   "uptime": 83.33333333333334,
+   "total": 900,
+   "down": 150,
+   "degrade": 0,
+   "status": "down"
+  },
+  {
+   "day": "D+0",
+   "uptime": 83.33333333333334,
+   "total": 900,
+   "down": 150,
+   "degrade": 0,
+   "status": "down"
+  }
+ ],
+ "config": [
+  false,
+  "v2",
+  true
+ ],
+ "daysummary bangumi.tv|guest -15": {
+  "day": "D-15",
+  "uptime": 98.88888888888889,
+  "total": 900,
+  "down": 0,
+  "degrade": 10,
+  "status": "degraded"
+ },
+ "daysummary bangumi.tv|guest -5": {
+  "day": "D-5",
+  "uptime": 99.44444444444444,
+  "total": 900,
+  "down": 0,
+  "degrade": 5,
+  "status": "degraded"
+ },
+ "daysummary bgm.tv|auth -15": {
+  "day": "D-15",
+  "uptime": 83.33333333333334,
+  "total": 900,
+  "down": 150,
+  "degrade": 0,
+  "status": "down"
+ },
+ "daysummary bgm.tv|auth -5": {
+  "day": "D-5",
+  "uptime": 83.33333333333334,
+  "total": 900,
+  "down": 150,
+  "degrade": 0,
+  "status": "down"
+ },
+ "dropped": 10,
+ "earliest": -1000,
+ "history": [
+  {
+   "start_ts": 1600000300,
+   "end_ts": 1600000400,
+   "status": "degraded",
+   "duration_s": 100,
+   "peak_down": 0,
+   "peak_total": 0,
+   "domain": "x",
+   "kind": "auth",
+   "label": "x · Authenticated"
+  },
+  {
+   "start_ts": 1600000100,
+   "end_ts": 1600000200,
+   "status": "down",
+   "duration_s": 100,
+   "peak_down": 3,
+   "peak_total": 5,
+   "domain": "x",
+   "kind": "auth",
+   "label": "x · Authenticated"
+  },
+  {
+   "start_ts": 1600000010,
+   "end_ts": 1600000020,
+   "status": "degraded",
+   "duration_s": 60,
+   "peak_down": 2,
+   "peak_total": 4,
+   "domain": "x",
+   "kind": "auth",
+   "label": "x · Authenticated"
+  },
+  {
+   "start_ts": 1599999000,
+   "end_ts": 1599999100,
+   "status": "down",
+   "duration_s": 100,
+   "peak_down": 0,
+   "peak_total": 0,
+   "domain": "x",
+   "kind": "guest",
+   "label": "x · Guest"
+  }
+ ],
+ "imported": 1,
+ "incidents bangumi.tv|guest": [
+  [
+   -423886,
+   -423879,
+   4,
+   5,
+   60,
+   8
+  ],
+  [
+   -422559,
+   -422552,
+   4,
+   5,
+   60,
+   8
+  ],
+  [
+   -83393,
+   -83379,
+   4,
+   5,
+   60,
+   8
+  ],
+  [
+   -79433,
+   -79366,
+   5,
+   5,
+   67,
+   8
+  ],
+  [
+   -79193,
+   -79186,
+   4,
+   5,
+   60,
+   8
+  ],
+  [
+   -78939,
+   -78939,
+   4,
+   5,
+   60,
+   8
+  ],
+  [
+   1034,
+   1034,
+   4,
+   5,
+   60,
+   8
+  ],
+  [
+   1341,
+   1341,
+   4,
+   5,
+   60,
+   8
+  ],
+  [
+   3734,
+   3741,
+   4,
+   5,
+   60,
+   8
+  ],
+  [
+   4108,
+   4108,
+   4,
+   5,
+   60,
+   8
+  ],
+  [
+   6600,
+   6607,
+   4,
+   5,
+   60,
+   8
+  ],
+  [
+   7800,
+   7807,
+   4,
+   5,
+   60,
+   8
+  ]
+ ],
+ "incidents bgm.tv|auth": [
+  [
+   -428379,
+   -426632,
+   4,
+   5,
+   1747,
+   4
+  ],
+  [
+   -82779,
+   -81032,
+   4,
+   5,
+   1747,
+   4
+  ],
+  [
+   3621,
+   5368,
+   4,
+   5,
+   1747,
+   4
+  ]
+ ],
+ "latest live.test": [
+  {
+   "probe": "pcn",
+   "region": "cn",
+   "status": "ok",
+   "latency_ms": 20,
+   "http_code": 500,
+   "ts": 75
+  },
+  {
+   "probe": "p4",
+   "region": "hk",
+   "status": "ok",
+   "latency_ms": 20,
+   "http_code": 500,
+   "ts": 77
+  },
+  {
+   "probe": "p1",
+   "region": "jp",
+   "status": "down",
+   "latency_ms": 20,
+   "http_code": 500,
+   "ts": 80
+  },
+  {
+   "probe": "p2",
+   "region": "jp",
+   "status": "down",
+   "latency_ms": 20,
+   "http_code": 500,
+   "ts": 79
+  },
+  {
+   "probe": "p3",
+   "region": "sg",
+   "status": "down",
+   "latency_ms": 20,
+   "http_code": 500,
+   "ts": 78
+  },
+  {
+   "probe": "p5",
+   "region": "us",
+   "status": "ok",
+   "latency_ms": 20,
+   "http_code": 500,
+   "ts": 76
+  }
+ ],
+ "latest nothing": null,
+ "latest online": 130,
+ "mine": {
+  "15": true,
+  "44": true
+ },
+ "online 0": [
+  {
+   "ts": 1700000040,
+   "count": 100
+  },
+  {
+   "ts": 1700000100,
+   "count": 105
+  },
+  {
+   "ts": 1700000220,
+   "count": 110
+  },
+  {
+   "ts": 1700000280,
+   "count": 112
+  },
+  {
+   "ts": 1700000340,
+   "count": 108
+  },
+  {
+   "ts": 1700000400,
+   "count": 300
+  },
+  {
+   "ts": 1700000460,
+   "count": 290
+  },
+  {
+   "ts": 1700000520,
+   "count": 120
+  },
+  {
+   "ts": 1700000580,
+   "count": 125
+  },
+  {
+   "ts": 1700000700,
+   "count": 130
+  }
+ ],
+ "online 120": [
+  {
+   "ts": 1700000040,
+   "count": 103,
+   "low": 100,
+   "peak": 105
+  },
+  {
+   "ts": 1700000160,
+   "count": 110,
+   "low": 110,
+   "peak": 110
+  },
+  {
+   "ts": 1700000280,
+   "count": 110,
+   "low": 108,
+   "peak": 112
+  },
+  {
+   "ts": 1700000400,
+   "count": 295,
+   "low": 290,
+   "peak": 300
+  },
+  {
+   "ts": 1700000520,
+   "count": 123,
+   "low": 120,
+   "peak": 125
+  },
+  {
+   "ts": 1700000640,
+   "count": 130,
+   "low": 130,
+   "peak": 130
+  }
+ ],
+ "online 300": [
+  {
+   "ts": 1699999800,
+   "count": 100,
+   "low": 100,
+   "peak": 100
+  },
+  {
+   "ts": 1700000100,
+   "count": 109,
+   "low": 105,
+   "peak": 112
+  },
+  {
+   "ts": 1700000400,
+   "count": 209,
+   "low": 120,
+   "peak": 300
+  },
+  {
+   "ts": 1700000700,
+   "count": 130,
+   "low": 130,
+   "peak": 130
+  }
+ ],
+ "probes": [
+  {
+   "name": "pcn",
+   "region": "cn",
+   "last_seen": 500,
+   "online": false
+  },
+  {
+   "name": "p4",
+   "region": "hk",
+   "last_seen": 300,
+   "online": false
+  },
+  {
+   "name": "p1",
+   "region": "jp",
+   "last_seen": 0,
+   "online": true
+  },
+  {
+   "name": "p2",
+   "region": "jp",
+   "last_seen": 100,
+   "online": true
+  },
+  {
+   "name": "p3",
+   "region": "sg",
+   "last_seen": 200,
+   "online": false
+  },
+  {
+   "name": "p5",
+   "region": "us",
+   "last_seen": 400,
+   "online": false
+  }
+ ],
+ "reactions": [
+  {
+   "emoji_id": 15,
+   "count": 1,
+   "mine": false
+  },
+  {
+   "emoji_id": 44,
+   "count": 3,
+   "mine": false
+  }
+ ],
+ "reactions left": 3,
+ "traffic 0": [
+  {
+   "ts": 1700000040,
+   "count": 3
+  },
+  {
+   "ts": 1700000100,
+   "count": 2
+  },
+  {
+   "ts": 1700000160,
+   "count": 5
+  }
+ ],
+ "traffic 120": [
+  {
+   "ts": 1700000040,
+   "count": 3,
+   "low": 2,
+   "peak": 3
+  },
+  {
+   "ts": 1700000160,
+   "count": 5,
+   "low": 5,
+   "peak": 5
+  }
+ ],
+ "traffic 300": [
+  {
+   "ts": 1699999800,
+   "count": 3,
+   "low": 3,
+   "peak": 3
+  },
+  {
+   "ts": 1700000100,
+   "count": 4,
+   "low": 2,
+   "peak": 5
+  }
+ ],
+ "wiki": {
+  "accepted": 2,
+  "latest": "2026-03-02",
+  "points": [
+   {
+    "title": "3/1",
+    "date": "2026-03-01",
+    "timestamp": 1,
+    "register_total": 11,
+    "collection_total": 0,
+    "topic_total": 0,
+    "reply_total": 0,
+    "collection_1": 0,
+    "collection_2": 0,
+    "collection_3": 0,
+    "collection_4": 0,
+    "collection_5": 0,
+    "topic_1": 0,
+    "topic_2": 0,
+    "topic_7": 0,
+    "reply_1": 0,
+    "reply_2": 0,
+    "reply_3": 0,
+    "reply_4": 0,
+    "reply_5": 0,
+    "reply_6": 0,
+    "reply_7": 0,
+    "reply_8": 8
+   },
+   {
+    "title": "3/2",
+    "date": "2026-03-02",
+    "timestamp": 2,
+    "register_total": 0,
+    "collection_total": 5,
+    "topic_total": 0,
+    "reply_total": 0,
+    "collection_1": 0,
+    "collection_2": 0,
+    "collection_3": 0,
+    "collection_4": 0,
+    "collection_5": 0,
+    "topic_1": 0,
+    "topic_2": 0,
+    "topic_7": 7,
+    "reply_1": 0,
+    "reply_2": 0,
+    "reply_3": 0,
+    "reply_4": 0,
+    "reply_5": 0,
+    "reply_6": 0,
+    "reply_7": 0,
+    "reply_8": 0
+   }
+  ],
+  "scraped": true
+ }
+}

@@ -19,13 +19,20 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build binaries
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Check
         run: |
-          mkdir -p dist
-          export CGO_ENABLED=0
-          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/aggregator-linux-amd64 ./cmd/aggregator
-          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/probe-linux-amd64     ./cmd/probe
-          GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o dist/probe-linux-arm64     ./cmd/probe
+          go vet ./...
+          go test ./...
+          (cd web && npm ci && npm run check)
+
+      - name: Build binaries
+        run: bash deploy/build.sh
 
       - name: Create release
         uses: softprops/action-gh-release@v2

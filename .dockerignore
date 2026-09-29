@@ -2,3 +2,4 @@ dist/
 info
 .ingest_secret
 deploy/
+web/node_modules

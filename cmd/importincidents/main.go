@@ -23,7 +23,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"flag"
 	"fmt"
 	"log"
@@ -35,10 +34,9 @@ import (
 	"bangumi-status/internal/store"
 	"bangumi-status/internal/types"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-var cst = time.FixedZone("CST", 8*60*60)
 
 type component struct {
 	domain string
@@ -58,17 +56,12 @@ func main() {
 	}
 
 	ctx := context.Background()
-	srcStore, err := store.Open(*src)
+	srcStore, err := store.Open(ctx, *src)
 	if err != nil {
 		log.Fatalf("open src: %v", err)
 	}
 	defer srcStore.Close()
-
-	meta, err := sql.Open("pgx", *src)
-	if err != nil {
-		log.Fatalf("open src meta: %v", err)
-	}
-	defer meta.Close()
+	meta := srcStore.Pool()
 
 	first, last, err := checkRange(ctx, meta)
 	if err != nil {
@@ -121,7 +114,7 @@ func main() {
 	if *dst == "" {
 		return
 	}
-	dstStore, err := store.Open(*dst)
+	dstStore, err := store.Open(ctx, *dst)
 	if err != nil {
 		log.Fatalf("open dst: %v", err)
 	}
@@ -137,42 +130,29 @@ func main() {
 	log.Printf("upserted %d windows into dst", written)
 }
 
-func checkRange(ctx context.Context, db *sql.DB) (int64, int64, error) {
-	var first, last sql.NullInt64
-	err := db.QueryRowContext(ctx, `SELECT MIN(ts), MAX(ts) FROM checks`).Scan(&first, &last)
-	if err != nil {
+func checkRange(ctx context.Context, db *pgxpool.Pool) (int64, int64, error) {
+	var first, last *int64
+	if err := db.QueryRow(ctx, `SELECT MIN(ts), MAX(ts) FROM checks`).Scan(&first, &last); err != nil {
 		return 0, 0, err
 	}
-	if !first.Valid {
+	if first == nil {
 		return 0, 0, fmt.Errorf("no rows in checks")
 	}
-	return first.Int64, last.Int64, nil
+	return *first, *last, nil
 }
 
-func components(ctx context.Context, db *sql.DB) ([]component, error) {
-	rows, err := db.QueryContext(ctx, `SELECT DISTINCT domain, kind FROM checks`)
+func components(ctx context.Context, db *pgxpool.Pool) ([]component, error) {
+	rows, err := db.Query(ctx, `SELECT DISTINCT domain, kind FROM checks ORDER BY domain COLLATE "C", kind COLLATE "C"`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []component
-	for rows.Next() {
-		var d, k string
-		if err := rows.Scan(&d, &k); err != nil {
-			return nil, err
-		}
-		out = append(out, component{domain: d, kind: types.Kind(k)})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].domain != out[j].domain {
-			return out[i].domain < out[j].domain
-		}
-		return out[i].kind < out[j].kind
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (component, error) {
+		var c component
+		return c, r.Scan(&c.domain, &c.kind)
 	})
-	return out, rows.Err()
 }
 
-func fmtTS(ts int64) string { return time.Unix(ts, 0).In(cst).Format("2006-01-02 15:04") }
+func fmtTS(ts int64) string { return time.Unix(ts, 0).In(types.CST).Format("2006-01-02 15:04") }
 
 // lit quotes a value read out of the dump for the emitted SQL. The set of
 // domains and kinds is closed in practice, but nothing here should depend on

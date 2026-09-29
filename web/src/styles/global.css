@@ -1,0 +1,183 @@
+/* Quiet Instrument · Bangumi Status
+   Global layer: design tokens, base elements and the few primitives shared by
+   several components. Everything else lives in its component's <style>. */
+
+:root {
+  --bg:           #f8f7f3;
+  --surface:      #ffffff;
+  --surface-2:    #f4f2ec;
+  --surface-sunk: #f6f4ef;
+  --border:       #eae8e1;
+  --border-strong:#d8d5cc;
+  --text:         #2c2a24;
+  --text-dim:     #6b6a63;
+  --text-faint:   #9a978e;
+
+  --brand:        #f09199;
+  --brand-ink:    #F77E94;
+  --accent:       #f09199;
+
+  --ok:           #85c99b;
+  --ok-soft:      #e8f1e7;
+  --ok-line:      #b6d2bb;
+
+  --degraded:     #D9C775;
+  --degraded-soft:#f7ecd3;
+  --degraded-line:#e3c488;
+
+  --down:         #D97A92;
+  --down-soft:    #f4dede;
+  --down-line:    #deb1b1;
+
+  --none:         #e6e4dc;
+  --none-soft:    #eeece4;
+
+  --shadow-sm: 0 1px 0 rgba(26,24,20,0.04);
+  --shadow-md: 0 1px 2px rgba(26,24,20,0.04), 0 6px 24px -12px rgba(26,24,20,0.08);
+
+  --radius:    10px;
+  --radius-sm: 6px;
+  --ease-out:  cubic-bezier(0.22, 0.61, 0.36, 1);
+
+  --font-sans: "Hanken Grotesk", ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:           #121311;
+    --surface:      #191b18;
+    --surface-2:    #1f211d;
+    --surface-sunk: #15171400;
+    --border:       #272a26;
+    --border-strong:#3a3e38;
+    --text:         #e8e6df;
+    --text-dim:     #a7a69c;
+    --text-faint:   #71736b;
+
+    --brand:        #f4a3aa;
+    --accent:       #f4a3aa;
+
+    --ok:           #8ccfa3;
+    --ok-soft:      #11241a;
+    --ok-line:      #294a36;
+
+    --degraded-soft:#2a2212;
+    --degraded-line:#553f16;
+
+    --down-soft:    #2a1414;
+    --down-line:    #552424;
+
+    --none:         #2c2f2a;
+    --none-soft:    #23251f;
+
+    --shadow-sm: 0 1px 0 rgba(0,0,0,0.3);
+    --shadow-md: 0 1px 2px rgba(0,0,0,0.4), 0 10px 40px -20px rgba(0,0,0,0.6);
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14.5px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "ss01", "cv11";
+  text-autospace: normal;
+}
+
+a { color: inherit; text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: color-mix(in srgb, currentColor 40%, transparent); }
+
+h1, h2, h3 { font-weight: 600; letter-spacing: -0.015em; margin: 0; }
+
+button { font-family: var(--font-sans); }
+
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "zero", "ss02";
+  letter-spacing: -0.01em;
+}
+
+/* Section heading row: title left, hint (and optional link) right. */
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+  padding: 0 2px;
+}
+.section-head h2 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+.section-head__hint {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+}
+
+/* Status colour dots. */
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--none);
+  transition: background 190ms ease;
+}
+.status-ok { --status: var(--ok); }
+.status-degraded { --status: var(--degraded); }
+.status-down { --status: var(--down); }
+.status-dot.status-ok, .status-dot.status-degraded, .status-dot.status-down { background: var(--status); }
+
+/* Hero header shared by the history and stats pages. */
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 24px;
+  align-items: end;
+  margin-bottom: 28px;
+  padding: 2px 2px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.hero h1 { font-size: 30px; line-height: 1.05; letter-spacing: -0.015em; }
+.hero__intro { max-width: 520px; margin: 8px 0 0; color: var(--text-dim); font-size: 13.5px; }
+.hero__meta { display: flex; gap: 24px; margin: 0; text-align: right; }
+.hero__meta dt { margin-bottom: 4px; color: var(--text-faint); font-size: 11px; font-weight: 500; letter-spacing: 0.08em; }
+.hero__meta dd { margin: 0; color: var(--text); font-size: 13px; }
+.notice {
+  margin-bottom: 22px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-dim);
+}
+@media (max-width: 720px) {
+  .hero { grid-template-columns: 1fr; gap: 14px; align-items: start; }
+  .hero__meta { text-align: left; gap: 18px; flex-wrap: wrap; }
+  .hero h1 { font-size: 24px; }
+}
+
+/* Chart library chrome shared by every uPlot instance. */
+.uplot, .u-wrap { font-family: var(--font-mono); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

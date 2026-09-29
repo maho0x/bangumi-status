@@ -1,0 +1,8 @@
+# Generates the frontend's API types from the Go wire model: `go tool tygo generate`
+packages:
+  - path: "bangumi-status/internal/types"
+    output_path: "web/src/lib/api-types.ts"
+    exclude_files: []
+    enum_style: "union"
+    type_mappings:
+      time.Time: "string"
