@@ -1,16 +1,12 @@
 <script lang="ts">
   import { t } from "../lib/i18n.svelte";
+  import Logo from "./Logo.svelte";
 
   let { route, onsubscribe }: { route: string; onsubscribe: () => void } = $props();
 </script>
 
 <div class="page-top">
-  <a class="brand" href="/">
-    <span class="badge" aria-hidden="true">
-      <svg viewBox="0 0 28 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1,14 6,9 10,11 15,4 20,7 27,3" /></svg>
-    </span>
-    <span class="name"><span class="italic">Bangumi</span>&nbsp;Status</span>
-  </a>
+  <a class="brand" href="/"><Logo /></a>
   <div class="actions">
     <nav class="pills" aria-label={t("nav_label")}>
       <a href="/" aria-current={route === "status" ? "page" : undefined}>{t("nav_status")}</a>
@@ -34,26 +30,8 @@
   }
   .actions { display: inline-flex; align-items: center; gap: 12px; min-width: 0; }
 
-  .brand {
-    display: inline-flex;
-    align-items: baseline;
-    font-size: 23px;
-    color: var(--text);
-    /* The wordmark keeps its own face. */
-    font-family: "Instrument Sans", var(--font-sans);
-  }
-  .brand:hover { text-decoration: none; }
-  .badge {
-    display: inline-flex;
-    align-items: center;
-    width: 37px;
-    height: 25px;
-    color: var(--brand-ink);
-    transform: translateY(4px);
-  }
-  .badge svg { width: 100%; height: 100%; }
-  .name { font-weight: 600; letter-spacing: -0.01em; }
-  .italic { font-style: italic; font-size: 26px; color: var(--brand-ink); margin-right: -2px; }
+  /* The wordmark is 1604.621 × 408.937. */
+  .brand { display: block; height: 40px; aspect-ratio: 1604.621 / 408.937; }
 
   .pills {
     display: inline-flex;
@@ -106,6 +84,7 @@
 
   @media (max-width: 640px) {
     .page-top { align-items: flex-start; gap: 12px; }
+    .brand { height: 32px; }
     .actions { gap: 8px; }
     .pills a { padding: 3px 8px; font-size: 11.5px; }
     .subscribe { width: 32px; padding: 2px; }
